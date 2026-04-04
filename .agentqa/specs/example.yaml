@@ -1,0 +1,40 @@
+name: Checkout Flow
+description: Validates the complete purchase flow from product browse to confirmation
+
+trigger:
+  paths:
+    - "src/checkout/**"
+    - "src/cart/**"
+    - "src/payments/**"
+
+environment:
+  type: web
+  base_url: "{{PREVIEW_URL}}"
+
+scenarios:
+  - name: "Happy path credit card checkout"
+    steps:
+      - "Navigate to the product listing page"
+      - "Add the first available product to the cart"
+      - "Open the cart and proceed to checkout"
+      - "Fill in shipping details with a valid US address"
+      - "Select standard shipping"
+      - "Enter test credit card 4242424242424242, any future expiry, any CVC"
+      - "Submit the order"
+    expect:
+      - "Order confirmation page is displayed"
+      - "An order number is visible on the page"
+      - "Cart is now empty"
+    on_failure: screenshot
+
+  - name: "Declined card shows error"
+    steps:
+      - "Add any product to cart and go to checkout"
+      - "Fill in valid shipping info"
+      - "Enter declined test card 4000000000000002"
+      - "Try to submit"
+    expect:
+      - "An error message about the card being declined is shown"
+      - "User stays on the payment page"
+      - "Cart still has the item"
+    on_failure: screenshot

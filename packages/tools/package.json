@@ -1,0 +1,20 @@
+{
+  "name": "@agentqa/tools",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "playwright": "^1.42.0",
+    "axios": "^1.6.0",
+    "simple-git": "^3.22.0",
+    "@anthropic-ai/sdk": "^0.32.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
