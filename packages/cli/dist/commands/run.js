@@ -21,7 +21,7 @@ export async function runCommand(specName, rootDir = process.cwd()) {
     // Filter by name if specified
     if (specName) {
         specEntries = specEntries.filter(({ spec, path: specPath }) => spec.name.toLowerCase() === specName.toLowerCase() ||
-            path.basename(specPath ?? "").replace(/\.ya?ml$/, "") === specName);
+            specPath.split("/").pop()?.replace(/\.ya?ml$/, "") === specName);
         if (specEntries.length === 0) {
             spinner.fail(`No spec found matching "${specName}"`);
             process.exit(1);
