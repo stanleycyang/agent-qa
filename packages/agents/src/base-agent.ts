@@ -16,6 +16,7 @@ export abstract class BaseAgent {
   abstract buildSystemPrompt(scenario: Scenario): string;
 
   async runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult> {
+    this.toolCalls = [];
     const start = Date.now();
     const messages: Anthropic.MessageParam[] = [];
     
@@ -107,8 +108,12 @@ Return a JSON result with this structure:
           trace: this.toolCalls,
         };
       }
-    } catch {}
-    
+    } catch (e) {
+      console.warn(
+        `Failed to parse agent JSON result: ${(e as Error).message}\nRaw output (truncated): ${finalText.substring(0, 500)}`
+      );
+    }
+
     return {
       scenario: scenario.name,
       status: "error",

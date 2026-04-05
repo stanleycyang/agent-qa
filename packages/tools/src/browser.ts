@@ -27,10 +27,10 @@ export class BrowserTool {
     return { success: true };
   }
   
-  async screenshot(path?: string): Promise<{ path?: string; buffer?: Buffer }> {
+  async screenshot(savePath?: string): Promise<{ path?: string; base64: string }> {
     if (!this.page) throw new Error("Browser not launched");
-    const buffer = await this.page.screenshot({ path, fullPage: false });
-    return { path, buffer };
+    const buffer = await this.page.screenshot({ path: savePath, fullPage: false });
+    return { path: savePath, base64: buffer.toString("base64") };
   }
   
   async getContent(): Promise<{ content: string }> {

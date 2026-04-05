@@ -72,14 +72,30 @@ export async function parseConfig(configPath: string): Promise<AgentQAConfig> {
 export async function loadAllSpecs(specsDir: string): Promise<Array<{ spec: AgentQASpec; path: string }>> {
   const files = await fs.readdir(specsDir);
   const yamlFiles = files.filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
-  
-  const specs = await Promise.all(
-    yamlFiles.map(async (file) => {
-      const specPath = path.join(specsDir, file);
+
+  if (yamlFiles.length === 0) {
+    return [];
+  }
+
+  const specs: Array<{ spec: AgentQASpec; path: string }> = [];
+  const errors: Array<{ file: string; error: string }> = [];
+
+  for (const file of yamlFiles) {
+    const specPath = path.join(specsDir, file);
+    try {
       const spec = await parseSpec(specPath);
-      return { spec, path: specPath };
-    })
-  );
-  
+      specs.push({ spec, path: specPath });
+    } catch (err: any) {
+      errors.push({ file, error: err.message });
+      console.warn(`Warning: skipping invalid spec ${file}: ${err.message}`);
+    }
+  }
+
+  if (specs.length === 0 && errors.length > 0) {
+    throw new Error(
+      `All spec files failed to parse:\n${errors.map(e => `  - ${e.file}: ${e.error}`).join("\n")}`
+    );
+  }
+
   return specs;
 }

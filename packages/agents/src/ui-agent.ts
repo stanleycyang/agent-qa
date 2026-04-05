@@ -18,6 +18,11 @@ export class UIAgent extends BaseAgent {
   async cleanup(): Promise<void> {
     await this.browser.close();
   }
+
+  async captureScreenshot(savePath: string): Promise<string> {
+    const result = await this.browser.screenshot(savePath);
+    return result.base64;
+  }
   
   getTools(): Anthropic.Tool[] {
     return [
