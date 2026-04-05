@@ -19,12 +19,14 @@ program
   .option("--verbose", "Show detailed agent traces and tool calls")
   .option("--json", "Output results as JSON (for CI)")
   .option("--dry-run", "Validate specs and show execution plan without running agents")
-  .action(async (specName?: string, opts?: { dir: string; verbose?: boolean; json?: boolean; dryRun?: boolean }) => {
+  .option("--watch", "Re-run specs on file changes")
+  .action(async (specName?: string, opts?: { dir: string; verbose?: boolean; json?: boolean; dryRun?: boolean; watch?: boolean }) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await runCommand(specName, rootDir, {
       verbose: opts?.verbose,
       json: opts?.json,
       dryRun: opts?.dryRun,
+      watch: opts?.watch,
     });
   });
 

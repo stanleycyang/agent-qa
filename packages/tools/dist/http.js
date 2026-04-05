@@ -9,6 +9,9 @@ export class HttpTool {
     async put(url, data, headers) {
         return axios.put(url, data, { headers });
     }
+    async patch(url, data, headers) {
+        return axios.patch(url, data, { headers });
+    }
     async delete(url, headers) {
         return axios.delete(url, { headers });
     }
@@ -19,7 +22,6 @@ export class HttpTool {
         };
     }
     validateJson(response, schema) {
-        // Basic validation - could be extended with JSON Schema validator
         const isJson = typeof response.data === "object";
         return {
             valid: isJson,

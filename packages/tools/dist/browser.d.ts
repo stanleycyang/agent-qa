@@ -1,10 +1,12 @@
 export declare class BrowserTool {
     private browser;
     private page;
+    private consoleMessages;
     launch(headless?: boolean): Promise<void>;
     navigate(url: string): Promise<{
         success: boolean;
         url: string;
+        title: string;
     }>;
     click(selector: string): Promise<{
         success: boolean;
@@ -23,6 +25,30 @@ export declare class BrowserTool {
         title: string;
     }>;
     waitForSelector(selector: string, timeout?: number): Promise<{
+        success: boolean;
+    }>;
+    hover(selector: string): Promise<{
+        success: boolean;
+    }>;
+    selectOption(selector: string, value: string): Promise<{
+        success: boolean;
+    }>;
+    getAttribute(selector: string, attribute: string): Promise<{
+        value: string | null;
+    }>;
+    getTextContent(selector: string): Promise<{
+        text: string | null;
+    }>;
+    evaluateJs(expression: string): Promise<{
+        result: unknown;
+    }>;
+    getConsoleErrors(): Promise<{
+        errors: Array<{
+            type: string;
+            text: string;
+        }>;
+    }>;
+    scroll(selector?: string, direction?: "up" | "down"): Promise<{
         success: boolean;
     }>;
     close(): Promise<void>;

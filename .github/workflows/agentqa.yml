@@ -1,0 +1,160 @@
+name: AgentQA
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  agentqa:
+    name: Run AgentQA specs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run AgentQA
+        id: agentqa
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PREVIEW_URL: ${{ github.event.deployment_status.target_url || '' }}
+        run: |
+          npx agentqa run --json > agentqa-results.json 2>&1 || true
+          echo "results<<EOF" >> $GITHUB_OUTPUT
+          cat agentqa-results.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentqa-screenshots
+          path: .agentqa/screenshots/
+          if-no-files-found: ignore
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let results;
+            try {
+              results = JSON.parse(fs.readFileSync('agentqa-results.json', 'utf8'));
+            } catch {
+              return; // No results to post
+            }
+
+            const { summary, duration_ms } = results;
+            const passed = summary?.passed ?? 0;
+            const failed = summary?.failed ?? 0;
+            const total = summary?.total ?? 0;
+            const duration = ((duration_ms ?? 0) / 1000).toFixed(1);
+            const status = failed > 0 ? '❌' : '✅';
+
+            let body = `## 🤖 AgentQA Results ${status}\n\n`;
+            body += `**${total} scenarios · ${passed} passed · ${failed} failed** (${duration}s)\n\n`;
+
+            if (results.results) {
+              for (const spec of results.results) {
+                const emoji = spec.status === 'pass' ? '✅' : '❌';
+                const specPassed = spec.scenarios.filter(s => s.status === 'pass').length;
+                body += `### ${emoji} ${spec.spec} (${specPassed}/${spec.scenarios.length})\n\n`;
+
+                for (const scenario of spec.scenarios) {
+                  const sEmoji = scenario.status === 'pass' ? '✅' : '❌';
+                  body += `- ${sEmoji} ${scenario.scenario}`;
+                  if (scenario.duration_ms) body += ` (${(scenario.duration_ms / 1000).toFixed(1)}s)`;
+                  body += '\n';
+
+                  if (scenario.status !== 'pass') {
+                    for (const exp of scenario.expectations) {
+                      if (exp.status === 'fail') {
+                        body += `  > **Expected:** ${exp.text}\n`;
+                        if (exp.evidence) body += `  > **Got:** ${exp.evidence}\n`;
+                        if (exp.reasoning) body += `  > ${exp.reasoning}\n`;
+                      }
+                    }
+                    if (scenario.error) body += `  > **Error:** ${scenario.error}\n`;
+                  }
+                }
+                body += '\n';
+              }
+            }
+
+            body += `\n<sub>Run by [AgentQA](https://github.com/stanleycyang/agentqa) · `;
+            body += `[View artifacts](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})</sub>`;
+
+            // Find and update existing comment or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existingComment = comments.find(c =>
+              c.body?.includes('🤖 AgentQA Results') && c.user?.login === 'github-actions[bot]'
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Set commit status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let results;
+            try {
+              results = JSON.parse(fs.readFileSync('agentqa-results.json', 'utf8'));
+            } catch {
+              return;
+            }
+
+            const failed = results.summary?.failed ?? 0;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: failed > 0 ? 'failure' : 'success',
+              description: failed > 0
+                ? `${failed} scenario(s) failed`
+                : `${results.summary?.passed ?? 0} scenario(s) passed`,
+              context: 'AgentQA',
+            });
