@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { runCommand } from "./commands/run.js";
 import { initCommand } from "./commands/init.js";
+import { validateCommand } from "./commands/validate.js";
 import * as path from "path";
 const program = new Command();
 program
@@ -12,17 +13,33 @@ program
     .command("run [spec]")
     .description("Run all specs or a named spec against the configured environment")
     .option("-d, --dir <path>", "Root directory of the project", process.cwd())
+    .option("--verbose", "Show detailed agent traces and tool calls")
+    .option("--json", "Output results as JSON (for CI)")
+    .option("--dry-run", "Validate specs and show execution plan without running agents")
     .action(async (specName, opts) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
-    await runCommand(specName, rootDir);
+    await runCommand(specName, rootDir, {
+        verbose: opts?.verbose,
+        json: opts?.json,
+        dryRun: opts?.dryRun,
+    });
 });
 program
     .command("init")
     .description("Initialize AgentQA in the current project")
     .option("-d, --dir <path>", "Root directory", process.cwd())
+    .option("--force", "Overwrite existing files")
     .action(async (opts) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
-    await initCommand(rootDir);
+    await initCommand(rootDir, opts?.force);
+});
+program
+    .command("validate")
+    .description("Validate spec files and configuration")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .action(async (opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await validateCommand(rootDir);
 });
 program.parse(process.argv);
 //# sourceMappingURL=index.js.map

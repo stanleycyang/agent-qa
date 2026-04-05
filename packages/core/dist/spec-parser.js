@@ -63,11 +63,25 @@ export async function parseConfig(configPath) {
 export async function loadAllSpecs(specsDir) {
     const files = await fs.readdir(specsDir);
     const yamlFiles = files.filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
-    const specs = await Promise.all(yamlFiles.map(async (file) => {
+    if (yamlFiles.length === 0) {
+        return [];
+    }
+    const specs = [];
+    const errors = [];
+    for (const file of yamlFiles) {
         const specPath = path.join(specsDir, file);
-        const spec = await parseSpec(specPath);
-        return { spec, path: specPath };
-    }));
+        try {
+            const spec = await parseSpec(specPath);
+            specs.push({ spec, path: specPath });
+        }
+        catch (err) {
+            errors.push({ file, error: err.message });
+            console.warn(`Warning: skipping invalid spec ${file}: ${err.message}`);
+        }
+    }
+    if (specs.length === 0 && errors.length > 0) {
+        throw new Error(`All spec files failed to parse:\n${errors.map(e => `  - ${e.file}: ${e.error}`).join("\n")}`);
+    }
     return specs;
 }
 //# sourceMappingURL=spec-parser.js.map

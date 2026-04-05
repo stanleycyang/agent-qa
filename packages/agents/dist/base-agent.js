@@ -8,6 +8,7 @@ export class BaseAgent {
         this.model = model;
     }
     async runScenario(scenario, environment) {
+        this.toolCalls = [];
         const start = Date.now();
         const messages = [];
         const userPrompt = this.buildUserPrompt(scenario, environment);
@@ -87,7 +88,9 @@ Return a JSON result with this structure:
                 };
             }
         }
-        catch { }
+        catch (e) {
+            console.warn(`Failed to parse agent JSON result: ${e.message}\nRaw output (truncated): ${finalText.substring(0, 500)}`);
+        }
         return {
             scenario: scenario.name,
             status: "error",

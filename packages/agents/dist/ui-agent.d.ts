@@ -6,6 +6,7 @@ export declare class UIAgent extends BaseAgent {
     constructor(model?: string);
     initialize(): Promise<void>;
     cleanup(): Promise<void>;
+    captureScreenshot(savePath: string): Promise<string>;
     getTools(): Anthropic.Tool[];
     handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
     buildSystemPrompt(scenario: Scenario): string;

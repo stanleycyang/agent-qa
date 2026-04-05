@@ -12,9 +12,9 @@ export declare class BrowserTool {
     type(selector: string, text: string): Promise<{
         success: boolean;
     }>;
-    screenshot(path?: string): Promise<{
+    screenshot(savePath?: string): Promise<{
         path?: string;
-        buffer?: Buffer;
+        base64: string;
     }>;
     getContent(): Promise<{
         content: string;

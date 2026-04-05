@@ -24,11 +24,11 @@ export class BrowserTool {
         await this.page.fill(selector, text);
         return { success: true };
     }
-    async screenshot(path) {
+    async screenshot(savePath) {
         if (!this.page)
             throw new Error("Browser not launched");
-        const buffer = await this.page.screenshot({ path, fullPage: false });
-        return { path, buffer };
+        const buffer = await this.page.screenshot({ path: savePath, fullPage: false });
+        return { path: savePath, base64: buffer.toString("base64") };
     }
     async getContent() {
         if (!this.page)

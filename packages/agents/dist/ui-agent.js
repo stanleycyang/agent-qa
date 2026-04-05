@@ -12,6 +12,10 @@ export class UIAgent extends BaseAgent {
     async cleanup() {
         await this.browser.close();
     }
+    async captureScreenshot(savePath) {
+        const result = await this.browser.screenshot(savePath);
+        return result.base64;
+    }
     getTools() {
         return [
             {

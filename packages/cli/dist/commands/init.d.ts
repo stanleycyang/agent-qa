@@ -1,2 +1,2 @@
-export declare function initCommand(rootDir?: string): Promise<void>;
+export declare function initCommand(rootDir?: string, force?: boolean): Promise<void>;
 //# sourceMappingURL=init.d.ts.map
