@@ -4,6 +4,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs, SpecResult, Scenario, AgentQASpec, ScenarioResult } from "@agentqa/core";
 import { UIAgent, APIAgent, LogicAgent, ReporterAgent } from "@agentqa/agents";
+import { BaselineStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 
 export interface RunOptions {
@@ -12,6 +13,7 @@ export interface RunOptions {
   json?: boolean;
   dryRun?: boolean;
   watch?: boolean;
+  updateBaselines?: boolean;
 }
 
 export async function runCommand(specName?: string, rootDir: string = process.cwd(), options: RunOptions = {}): Promise<void> {
@@ -123,12 +125,28 @@ async function runOnce(
   const screenshotOnFailure = config.execution?.screenshot_on_failure ?? false;
   const concurrency = config.execution?.concurrency ?? 1;
   const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
+  const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
   const reporter = new ReporterAgent();
+
+  if (options.updateBaselines) {
+    log(chalk.blue("📸 Baseline update mode — all baselines will be refreshed\n"));
+  }
 
   // Run specs with concurrency
   const allResults: SpecResult[] = await runSpecsConcurrently(
     specEntries,
-    { timeoutMs, maxRetries, screenshotOnFailure, agentModel, rootDir, concurrency, verbose, json },
+    {
+      timeoutMs,
+      maxRetries,
+      screenshotOnFailure,
+      agentModel,
+      rootDir,
+      concurrency,
+      verbose,
+      json,
+      baselineStore,
+      updateBaselines: options.updateBaselines ?? false,
+    },
     log,
     config,
   );
@@ -160,6 +178,8 @@ interface RunConfig {
   concurrency: number;
   verbose: boolean;
   json: boolean;
+  baselineStore: BaselineStore;
+  updateBaselines: boolean;
 }
 
 async function runSpecsConcurrently(
@@ -202,7 +222,7 @@ async function runSpec(
   config: Awaited<ReturnType<typeof loadConfig>>,
 ): Promise<SpecResult> {
   const { spec } = entry;
-  const { timeoutMs, maxRetries, screenshotOnFailure, agentModel, rootDir, verbose, json } = runConfig;
+  const { timeoutMs, maxRetries, verbose, json } = runConfig;
 
   log(`\n${chalk.bold(`🚀 Running ${spec.name}`)} (${spec.scenarios.length} scenarios)...`);
 
@@ -224,7 +244,7 @@ async function runSpec(
       };
 
       const result = await runWithRetries(
-        () => executeScenario(spec, scenario, envVars, agentModel, screenshotOnFailure, rootDir),
+        () => executeScenario(spec, scenario, envVars, runConfig),
         maxRetries,
         scenario.name,
         timeoutMs,
@@ -292,12 +312,17 @@ async function executeScenario(
   spec: AgentQASpec,
   scenario: Scenario,
   envVars: Record<string, string>,
-  agentModel: string,
-  screenshotOnFailure: boolean,
-  rootDir: string,
+  runConfig: RunConfig,
 ): Promise<ScenarioResult> {
+  const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
+
   if (spec.environment.type === "web") {
-    const agent = new UIAgent(agentModel);
+    const agent = new UIAgent({
+      model: agentModel,
+      baselineStore,
+      specName: spec.name,
+      updateBaselines,
+    });
     await agent.initialize();
     try {
       const result = await agent.runScenario(scenario, envVars);

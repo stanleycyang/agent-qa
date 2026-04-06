@@ -4,6 +4,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs } from "@agentqa/core";
 import { UIAgent, APIAgent, LogicAgent, ReporterAgent } from "@agentqa/agents";
+import { BaselineStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 export async function runCommand(specName, rootDir = process.cwd(), options = {}) {
     const { verbose = false, json = false, dryRun = false, watch = false } = options;
@@ -96,9 +97,24 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
     const screenshotOnFailure = config.execution?.screenshot_on_failure ?? false;
     const concurrency = config.execution?.concurrency ?? 1;
     const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
+    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
     const reporter = new ReporterAgent();
+    if (options.updateBaselines) {
+        log(chalk.blue("📸 Baseline update mode — all baselines will be refreshed\n"));
+    }
     // Run specs with concurrency
-    const allResults = await runSpecsConcurrently(specEntries, { timeoutMs, maxRetries, screenshotOnFailure, agentModel, rootDir, concurrency, verbose, json }, log, config);
+    const allResults = await runSpecsConcurrently(specEntries, {
+        timeoutMs,
+        maxRetries,
+        screenshotOnFailure,
+        agentModel,
+        rootDir,
+        concurrency,
+        verbose,
+        json,
+        baselineStore,
+        updateBaselines: options.updateBaselines ?? false,
+    }, log, config);
     // Summary
     const summary = reporter.generateSummary(allResults);
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration_ms, 0);
@@ -140,7 +156,7 @@ async function runSpecsConcurrently(specEntries, runConfig, log, config) {
 }
 async function runSpec(entry, runConfig, log, config) {
     const { spec } = entry;
-    const { timeoutMs, maxRetries, screenshotOnFailure, agentModel, rootDir, verbose, json } = runConfig;
+    const { timeoutMs, maxRetries, verbose, json } = runConfig;
     log(`\n${chalk.bold(`🚀 Running ${spec.name}`)} (${spec.scenarios.length} scenarios)...`);
     const specStart = Date.now();
     const scenarioResults = [];
@@ -157,7 +173,7 @@ async function runSpec(entry, runConfig, log, config) {
                 base_url: resolveEnv(spec.environment.base_url) ?? "",
                 api_url: resolveEnv(config.environment?.api_url) ?? "",
             };
-            const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, agentModel, screenshotOnFailure, rootDir), maxRetries, scenario.name, timeoutMs, log);
+            const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, runConfig), maxRetries, scenario.name, timeoutMs, log);
             const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
             if (result.status === "pass") {
                 scenarioSpinner.succeed(chalk.green(`  ✅ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
@@ -205,9 +221,15 @@ async function runSpec(entry, runConfig, log, config) {
         duration_ms: Date.now() - specStart,
     };
 }
-async function executeScenario(spec, scenario, envVars, agentModel, screenshotOnFailure, rootDir) {
+async function executeScenario(spec, scenario, envVars, runConfig) {
+    const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
     if (spec.environment.type === "web") {
-        const agent = new UIAgent(agentModel);
+        const agent = new UIAgent({
+            model: agentModel,
+            baselineStore,
+            specName: spec.name,
+            updateBaselines,
+        });
         await agent.initialize();
         try {
             const result = await agent.runScenario(scenario, envVars);

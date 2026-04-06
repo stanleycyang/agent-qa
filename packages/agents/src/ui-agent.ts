@@ -1,16 +1,38 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { Scenario } from "@agentqa/core";
-import { BrowserTool, AssertionEngine } from "@agentqa/tools";
+import { BrowserTool, AssertionEngine, BaselineStore } from "@agentqa/tools";
 import { BaseAgent } from "./base-agent.js";
+
+export interface UIAgentOptions {
+  model?: string;
+  baselineStore?: BaselineStore;
+  specName?: string;
+  updateBaselines?: boolean;
+}
 
 export class UIAgent extends BaseAgent {
   private browser: BrowserTool;
   private assertions: AssertionEngine;
+  private baselineStore?: BaselineStore;
+  private specName?: string;
+  private updateBaselines: boolean;
+  private currentScenarioName: string = "";
 
-  constructor(model?: string) {
-    super(model);
+  constructor(modelOrOptions?: string | UIAgentOptions) {
+    const options: UIAgentOptions = typeof modelOrOptions === "string"
+      ? { model: modelOrOptions }
+      : (modelOrOptions ?? {});
+    super(options.model);
     this.browser = new BrowserTool();
     this.assertions = new AssertionEngine();
+    this.baselineStore = options.baselineStore;
+    this.specName = options.specName;
+    this.updateBaselines = options.updateBaselines ?? false;
+  }
+
+  async runScenario(scenario: Scenario, environment: Record<string, string>) {
+    this.currentScenarioName = scenario.name;
+    return super.runScenario(scenario, environment);
   }
 
   async initialize(): Promise<void> {
@@ -180,6 +202,29 @@ export class UIAgent extends BaseAgent {
           },
           required: ["expectation"]
         }
+      },
+      {
+        name: "check_visual_regression",
+        description: "Compare the current page against a stored baseline screenshot to detect visual regressions. On first run (or in --update-baselines mode), saves the current state as the baseline. On subsequent runs, uses AI vision to detect meaningful differences (layout shifts, missing elements, broken styling). Use this when you want pixel-stable verification of a critical view.",
+        input_schema: {
+          type: "object",
+          properties: {
+            baseline_name: { type: "string", description: "Name for this baseline (e.g. 'homepage', 'checkout-form'). Used as the filename." },
+            context: { type: "string", description: "Optional context about what the page should look like, to help the vision model ignore irrelevant differences." }
+          },
+          required: ["baseline_name"]
+        }
+      },
+      {
+        name: "detect_visual_issues",
+        description: "Proactively scan the current page for visual breakages and UX issues WITHOUT a baseline. Uses AI vision to find: layout bugs, text overflow, broken images, misaligned elements, missing content, accessibility issues. Returns a list of issues with severity. Use this as a safety net on every important page.",
+        input_schema: {
+          type: "object",
+          properties: {
+            context: { type: "string", description: "Optional context about the page (e.g. 'product detail page for a checkout flow')" }
+          },
+          required: []
+        }
       }
     ];
   }
@@ -216,6 +261,58 @@ export class UIAgent extends BaseAgent {
         const screenshot = await this.browser.screenshot();
         return this.assertions.assertScreenshot(screenshot.base64, input.expectation as string);
       }
+      case "check_visual_regression": {
+        const screenshot = await this.browser.screenshot();
+        const baselineName = input.baseline_name as string;
+        const context = input.context as string | undefined;
+
+        if (!this.baselineStore || !this.specName) {
+          return {
+            pass: false,
+            confidence: 0,
+            reasoning: "Baseline store not configured. Visual regression testing requires a baseline directory.",
+            differences: [],
+          };
+        }
+
+        const hasBaseline = await this.baselineStore.exists(this.specName, this.currentScenarioName, baselineName);
+
+        // Create baseline on first run or in update mode
+        if (!hasBaseline || this.updateBaselines) {
+          const savedPath = await this.baselineStore.save(
+            this.specName,
+            this.currentScenarioName,
+            baselineName,
+            screenshot.base64,
+          );
+          return {
+            pass: true,
+            confidence: 1.0,
+            reasoning: hasBaseline
+              ? `Baseline updated at ${savedPath}`
+              : `No baseline existed — created new baseline at ${savedPath}. Commit it to git and re-run to enable regression testing.`,
+            differences: [],
+            baseline_created: true,
+          };
+        }
+
+        // Compare against existing baseline
+        const baselineBase64 = await this.baselineStore.load(this.specName, this.currentScenarioName, baselineName);
+        if (!baselineBase64) {
+          return {
+            pass: false,
+            confidence: 0,
+            reasoning: "Failed to load baseline",
+            differences: [],
+          };
+        }
+
+        return this.assertions.compareScreenshots(screenshot.base64, baselineBase64, context);
+      }
+      case "detect_visual_issues": {
+        const screenshot = await this.browser.screenshot();
+        return this.assertions.detectVisualIssues(screenshot.base64, input.context as string | undefined);
+      }
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -234,11 +331,20 @@ export class UIAgent extends BaseAgent {
 ## Tool selection guidance
 - Use **get_content** first when you need to discover selectors on the page
 - Use **wait_for_selector** after any action that triggers navigation or dynamic loading
-- Use **screenshot** + **assert_visual** for visual expectations (layout, design, images)
+- Use **assert_visual** for one-off visual expectations ("the checkout button is prominent")
+- Use **check_visual_regression** for pixel-stable critical views — compares against a saved baseline
+- Use **detect_visual_issues** as a safety net — proactively finds broken layout, overflow, broken images, missing content WITHOUT needing a baseline
 - Use **get_text** for specific text content verification
 - Use **get_console_errors** to check for JavaScript errors if something seems broken
 - Use **execute_js** for checking things not visible in HTML (localStorage, cookies, computed styles)
 - Use **scroll** before interacting with elements that may be below the fold
+
+## Visual testing strategy
+When the scenario involves visual verification:
+1. For critical UI that must remain stable: use **check_visual_regression** with a descriptive baseline_name
+2. For open-ended "does it look right?" checks: use **detect_visual_issues** — it will flag layout bugs, text overflow, broken images, and other UX breakages without needing a reference
+3. For natural language visual claims: use **assert_visual**
+4. Combine **detect_visual_issues** + **get_console_errors** for a thorough "is this page healthy?" check
 
 ## Error recovery
 - If a click fails, try get_content to find the right selector

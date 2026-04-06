@@ -49,6 +49,8 @@ scenarios:
     expect:
       - "Order confirmation page is displayed"
       - "An order number is visible"
+      - "No visual regressions on the confirmation page (use check_visual_regression with baseline_name 'confirmation')"
+      - "No broken layout or overflow issues (use detect_visual_issues)"
     on_failure: screenshot
 `;
 async function fileExists(filePath) {

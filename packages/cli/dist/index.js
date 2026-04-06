@@ -17,6 +17,7 @@ program
     .option("--json", "Output results as JSON (for CI)")
     .option("--dry-run", "Validate specs and show execution plan without running agents")
     .option("--watch", "Re-run specs on file changes")
+    .option("--update-baselines", "Refresh visual regression baselines with current state")
     .action(async (specName, opts) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await runCommand(specName, rootDir, {
@@ -24,6 +25,7 @@ program
         json: opts?.json,
         dryRun: opts?.dryRun,
         watch: opts?.watch,
+        updateBaselines: opts?.updateBaselines,
     });
 });
 program
