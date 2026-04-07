@@ -3,6 +3,8 @@ import { Command } from "commander";
 import { runCommand } from "./commands/run.js";
 import { initCommand } from "./commands/init.js";
 import { validateCommand } from "./commands/validate.js";
+import { generateCommand } from "./commands/generate.js";
+import { gapsCommand } from "./commands/gaps.js";
 import * as path from "path";
 
 const program = new Command();
@@ -40,6 +42,42 @@ program
   .action(async (opts?: { dir: string; force?: boolean }) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await initCommand(rootDir, opts?.force);
+  });
+
+program
+  .command("generate [target]")
+  .description("Generate spec files automatically from git diff, a file, or an external source")
+  .option("-d, --dir <path>", "Root directory", process.cwd())
+  .option("--ref <ref>", "Git ref to compare against (default: HEAD~1)")
+  .option("--type <type>", "Force environment type: web, api, or logic")
+  .option("--out <path>", "Output directory for specs (default: .agentqa/specs)")
+  .option("--dry-run", "Print specs without writing them to disk")
+  .option("--force", "Overwrite existing spec files")
+  .option("--from-figma <url>", "Generate specs from a Figma file or frame URL")
+  .option("--from-sentry [issue]", "Generate specs from Sentry error issues")
+  .option("--from-issue <url>", "Generate specs from a Linear or Jira issue URL")
+  .action(async (target?: string, opts?: any) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await generateCommand(target, rootDir, {
+      ref: opts?.ref,
+      type: opts?.type,
+      out: opts?.out,
+      dryRun: opts?.dryRun,
+      force: opts?.force,
+      fromFigma: opts?.fromFigma,
+      fromSentry: opts?.fromSentry,
+      fromIssue: opts?.fromIssue,
+    });
+  });
+
+program
+  .command("gaps")
+  .description("Find changed files that aren't covered by any spec")
+  .option("-d, --dir <path>", "Root directory", process.cwd())
+  .option("--ref <ref>", "Git ref to compare against (default: HEAD~1)")
+  .action(async (opts?: any) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await gapsCommand(rootDir, { ref: opts?.ref });
   });
 
 program
