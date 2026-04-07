@@ -5,7 +5,8 @@ export interface GenerateOptions {
     dryRun?: boolean;
     force?: boolean;
     fromFigma?: string;
-    fromSentry?: string;
+    /** True (no specific issue) or a Sentry issue ID. */
+    fromSentry?: string | boolean;
     fromIssue?: string;
 }
 export declare function generateCommand(target: string | undefined, rootDir?: string, options?: GenerateOptions): Promise<void>;

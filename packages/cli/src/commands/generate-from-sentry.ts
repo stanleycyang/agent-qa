@@ -9,7 +9,7 @@ import { AgentQAConfig } from "@agentqa/core";
  * If a specific issue ID is given, fetches that issue's events and breadcrumbs.
  */
 export async function buildSentryContext(
-  issueIdOrEmpty: string | undefined,
+  issueIdOrEmpty: string | boolean | undefined,
   config: AgentQAConfig,
 ): Promise<string> {
   const token = process.env.SENTRY_TOKEN ?? config.integrations?.sentry_token;
@@ -27,11 +27,14 @@ export async function buildSentryContext(
   const headers = { Authorization: `Bearer ${token}` };
   const baseUrl = "https://sentry.io/api/0";
 
-  // Resolve which issue(s) to fetch
+  // Resolve which issue(s) to fetch. When the user passes --from-sentry with no
+  // value, Commander supplies `true`; with --from-sentry abc123 it supplies a string.
+  const explicitId = typeof issueIdOrEmpty === "string" && issueIdOrEmpty.length > 0
+    ? issueIdOrEmpty
+    : null;
   const issueIds: string[] = [];
-  const isPlaceholder = !issueIdOrEmpty || issueIdOrEmpty === "true";
 
-  if (isPlaceholder) {
+  if (!explicitId) {
     // Fetch top unresolved issues
     try {
       const resp = await axios.get(`${baseUrl}/projects/${org}/${project}/issues/`, {
@@ -45,7 +48,7 @@ export async function buildSentryContext(
       throw new Error(`Sentry API error: ${err.message}`);
     }
   } else {
-    issueIds.push(issueIdOrEmpty);
+    issueIds.push(explicitId);
   }
 
   if (issueIds.length === 0) {

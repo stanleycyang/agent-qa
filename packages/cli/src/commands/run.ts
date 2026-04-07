@@ -2,10 +2,11 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import chalk from "chalk";
 import ora from "ora";
-import { loadAllSpecs, SpecResult, Scenario, AgentQASpec, ScenarioResult } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent, ReporterAgent, A11yAgent, SecurityAgent } from "@agentqa/agents";
+import { loadAllSpecs, SpecResult, Scenario, AgentQASpec, ScenarioResult, ViewportConfig, BrowserType } from "@agentqa/core";
+import { ReporterAgent } from "@agentqa/agents";
 import { BaselineStore, HistoryStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
+import { executeScenario, resolveEnv } from "../scenario-runner.js";
 
 export interface RunOptions {
   dir?: string;
@@ -136,28 +137,34 @@ async function runOnce(
     log(chalk.blue("📸 Baseline update mode — all baselines will be refreshed\n"));
   }
 
-  // Run specs with concurrency
-  const allResults: SpecResult[] = await runSpecsConcurrently(
-    specEntries,
-    {
-      timeoutMs,
-      maxRetries,
-      screenshotOnFailure,
-      agentModel,
-      rootDir,
-      concurrency,
-      verbose,
-      json,
-      baselineStore,
-      historyStore,
-      perfThreshold,
-      flakyThreshold,
-      recordVideoOnFailure,
-      updateBaselines: options.updateBaselines ?? false,
-    },
-    log,
-    config,
-  );
+  // Run specs with concurrency. Always flush history afterwards so a crash
+  // mid-run still preserves the entries we already buffered.
+  let allResults: SpecResult[];
+  try {
+    allResults = await runSpecsConcurrently(
+      specEntries,
+      {
+        timeoutMs,
+        maxRetries,
+        screenshotOnFailure,
+        agentModel,
+        rootDir,
+        concurrency,
+        verbose,
+        json,
+        baselineStore,
+        historyStore,
+        perfThreshold,
+        flakyThreshold,
+        recordVideoOnFailure,
+        updateBaselines: options.updateBaselines ?? false,
+      },
+      log,
+      config,
+    );
+  } finally {
+    await historyStore.flush();
+  }
 
   // Summary
   const summary = reporter.generateSummary(allResults);
@@ -192,10 +199,6 @@ interface RunConfig {
   flakyThreshold: number;
   updateBaselines: boolean;
   recordVideoOnFailure: boolean;
-}
-
-function sanitize(s: string): string {
-  return s.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
 async function runSpecsConcurrently(
@@ -266,7 +269,16 @@ async function runSpec(
         };
 
         const result = await runWithRetries(
-          () => executeScenario(spec, scenario, envVars, runConfig, matrixEntry.viewport, matrixEntry.browser),
+          () => executeScenario(spec, scenario, envVars, {
+            agentModel: runConfig.agentModel,
+            rootDir: runConfig.rootDir,
+            baselineStore: runConfig.baselineStore,
+            updateBaselines: runConfig.updateBaselines,
+            screenshotOnFailure: runConfig.screenshotOnFailure,
+            recordVideoOnFailure: runConfig.recordVideoOnFailure,
+            matrixViewport: matrixEntry.viewport,
+            matrixBrowser: matrixEntry.browser,
+          }),
           maxRetries,
           scenario.name,
           timeoutMs,
@@ -287,8 +299,8 @@ async function runSpec(
         };
       }
 
-      // Append to history (after annotation so we don't compare against ourselves)
-      await historyStore.append({
+      // Buffer in-memory; flushed once at the end of the run.
+      await historyStore.appendBuffered({
         spec: spec.name,
         scenario: scenario.name,
         status: result.status,
@@ -358,100 +370,9 @@ async function runSpec(
   };
 }
 
-async function executeScenario(
-  spec: AgentQASpec,
-  scenario: Scenario,
-  envVars: Record<string, string>,
-  runConfig: RunConfig,
-  matrixViewport?: import("@agentqa/core").ViewportConfig,
-  matrixBrowser?: import("@agentqa/core").BrowserType,
-): Promise<ScenarioResult> {
-  const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
-
-  if (spec.environment.type === "web" || spec.environment.type === "a11y") {
-    const AgentClass = spec.environment.type === "a11y" ? A11yAgent : UIAgent;
-    const recordVideo = runConfig.recordVideoOnFailure;
-    const replayDir = recordVideo
-      ? path.join(rootDir, ".agentqa", "replays", `${sanitize(spec.name)}_${sanitize(scenario.name)}_${Date.now()}`)
-      : undefined;
-    if (replayDir) {
-      await fs.mkdir(replayDir, { recursive: true });
-    }
-    const agent = new AgentClass({
-      model: agentModel,
-      baselineStore,
-      specName: spec.name,
-      updateBaselines,
-      viewport: matrixViewport,
-      browserType: matrixBrowser,
-      recordVideoDir: replayDir,
-    });
-    await agent.initialize();
-    let result: ScenarioResult | undefined;
-    try {
-      result = await agent.runScenario(scenario, envVars);
-      if (screenshotOnFailure && result.status !== "pass") {
-        try {
-          const screenshotDir = path.join(rootDir, ".agentqa", "screenshots");
-          await fs.mkdir(screenshotDir, { recursive: true });
-          const matrixSuffix = matrixViewport || matrixBrowser
-            ? `_${matrixViewport?.name ?? ""}${matrixBrowser ? "-" + matrixBrowser : ""}`
-            : "";
-          const filename = `${spec.name}_${scenario.name}${matrixSuffix}_${Date.now()}.png`.replace(/\s+/g, "-");
-          const screenshotPath = path.join(screenshotDir, filename);
-          await agent.captureScreenshot(screenshotPath);
-          result.screenshots = [screenshotPath];
-        } catch {
-          // Screenshot capture is best-effort
-        }
-      }
-      // Persist replay artifacts on failure
-      if (recordVideo && replayDir && result.status !== "pass") {
-        try {
-          const browser = agent.getBrowser();
-          await fs.writeFile(
-            path.join(replayDir, "network.json"),
-            JSON.stringify(browser.getNetworkLog(), null, 2),
-          );
-          await fs.writeFile(
-            path.join(replayDir, "console.json"),
-            JSON.stringify(browser.getConsoleMessages(), null, 2),
-          );
-          await fs.writeFile(
-            path.join(replayDir, "trace.json"),
-            JSON.stringify(result.trace ?? [], null, 2),
-          );
-          result.network_path = path.join(replayDir, "network.json");
-        } catch {}
-      }
-      const healEvents = agent.getHealEvents();
-      if (healEvents.length > 0) {
-        (result as any).healed_selectors = healEvents;
-      }
-    } finally {
-      await agent.cleanup();
-      // Get video path AFTER cleanup (Playwright finalizes the file then)
-      if (recordVideo && replayDir && result && result.status !== "pass") {
-        try {
-          const fsSync = await import("fs");
-          const files = fsSync.readdirSync(replayDir).filter(f => f.endsWith(".webm"));
-          if (files.length > 0) {
-            result.video_path = path.join(replayDir, files[0]);
-          }
-        } catch {}
-      }
-    }
-    return result!;
-  } else if (spec.environment.type === "api") {
-    const agent = new APIAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  } else if (spec.environment.type === "security") {
-    const agent = new SecurityAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  } else {
-    const agent = new LogicAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  }
+interface MatrixEntry {
+  viewport?: ViewportConfig;
+  browser?: BrowserType;
 }
 
 /** Expand a single scenario into the configured viewport × browser matrix. */
@@ -459,23 +380,26 @@ function expandMatrix(
   spec: AgentQASpec,
   scenario: Scenario,
   config: Awaited<ReturnType<typeof loadConfig>>,
-): Array<{ viewport?: import("@agentqa/core").ViewportConfig; browser?: import("@agentqa/core").BrowserType }> {
+): MatrixEntry[] {
   if (spec.environment.type !== "web") {
     return [{}];
   }
-  const viewports = config.execution?.viewports;
-  const browsers = config.execution?.browsers;
+  const viewports: Array<ViewportConfig | undefined> = config.execution?.viewports?.length
+    ? config.execution.viewports
+    : [undefined];
+  const browsers: Array<BrowserType | undefined> = config.execution?.browsers?.length
+    ? config.execution.browsers
+    : [undefined];
 
-  if (!viewports?.length && !browsers?.length) {
+  if (viewports.length === 1 && viewports[0] === undefined &&
+      browsers.length === 1 && browsers[0] === undefined) {
     return [{}];
   }
 
-  const vps = viewports?.length ? viewports : [undefined];
-  const brs = browsers?.length ? browsers : [undefined];
-  const matrix: Array<{ viewport?: import("@agentqa/core").ViewportConfig; browser?: import("@agentqa/core").BrowserType }> = [];
-  for (const vp of vps) {
-    for (const br of brs) {
-      matrix.push({ viewport: vp as any, browser: br as any });
+  const matrix: MatrixEntry[] = [];
+  for (const viewport of viewports) {
+    for (const browser of browsers) {
+      matrix.push({ viewport, browser });
     }
   }
   return matrix;
@@ -597,7 +521,3 @@ async function runWatchMode(
   });
 }
 
-function resolveEnv(value?: string): string | undefined {
-  if (!value) return undefined;
-  return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
-}

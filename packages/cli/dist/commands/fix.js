@@ -2,9 +2,10 @@ import * as path from "path";
 import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent, FixAgent } from "@agentqa/agents";
+import { FixAgent } from "@agentqa/agents";
 import { BaselineStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
+import { executeScenario, resolveEnv } from "../scenario-runner.js";
 export async function fixCommand(rootDir = process.cwd(), options = {}) {
     if (!process.env.ANTHROPIC_API_KEY) {
         console.error(chalk.red("Error: ANTHROPIC_API_KEY environment variable is not set."));
@@ -13,6 +14,7 @@ export async function fixCommand(rootDir = process.cwd(), options = {}) {
     const config = await loadConfig(rootDir);
     const specsDir = path.join(rootDir, ".agentqa", "specs");
     const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
+    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
     const spinner = ora("Loading specs...").start();
     const specEntries = await loadAllSpecs(specsDir);
     const filtered = options.spec
@@ -25,7 +27,15 @@ export async function fixCommand(rootDir = process.cwd(), options = {}) {
         for (const scenario of spec.scenarios) {
             const scenarioSpinner = ora(`  ${spec.name} → ${scenario.name}`).start();
             try {
-                const result = await runOneScenario(spec, scenario, agentModel, rootDir, config);
+                const envVars = {
+                    base_url: resolveEnv(spec.environment.base_url) ?? "",
+                    api_url: resolveEnv(config.environment?.api_url) ?? "",
+                };
+                const result = await executeScenario(spec, scenario, envVars, {
+                    agentModel,
+                    rootDir,
+                    baselineStore,
+                });
                 if (result.status !== "pass") {
                     scenarioSpinner.fail(chalk.red(`  ❌ ${spec.name} → ${scenario.name}`));
                     failures.push({ spec: spec.name, result });
@@ -74,35 +84,5 @@ export async function fixCommand(rootDir = process.cwd(), options = {}) {
             fixSpinner.fail(`Investigation failed: ${err.message}`);
         }
     }
-}
-async function runOneScenario(spec, scenario, agentModel, rootDir, config) {
-    const envVars = {
-        base_url: resolveEnv(spec.environment.base_url) ?? "",
-        api_url: resolveEnv(config.environment?.api_url) ?? "",
-    };
-    if (spec.environment.type === "web") {
-        const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
-        const agent = new UIAgent({ model: agentModel, baselineStore, specName: spec.name });
-        await agent.initialize();
-        try {
-            return await agent.runScenario(scenario, envVars);
-        }
-        finally {
-            await agent.cleanup();
-        }
-    }
-    else if (spec.environment.type === "api") {
-        const agent = new APIAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-    else {
-        const agent = new LogicAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-}
-function resolveEnv(value) {
-    if (!value)
-        return undefined;
-    return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
 }
 //# sourceMappingURL=fix.js.map

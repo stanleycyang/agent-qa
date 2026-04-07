@@ -14,6 +14,8 @@ export declare class BrowserTool {
     private page;
     private consoleMessages;
     private networkLog;
+    /** Maps each Playwright Request to its log entry so the response handler is O(1). */
+    private requestEntries;
     private currentVideoDir?;
     launch(options?: BrowserLaunchOptions | boolean): Promise<void>;
     /** Get the captured network log for the current session. */

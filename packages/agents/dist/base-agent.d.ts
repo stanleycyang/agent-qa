@@ -15,6 +15,15 @@ export declare abstract class BaseAgent {
     abstract getTools(): Anthropic.Tool[];
     abstract handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
     abstract buildSystemPrompt(scenario: Scenario): string;
+    /**
+     * Drive a conversation loop with the model: send the prompt, handle any
+     * tool calls (including the built-in write_file when allowed), and return
+     * the final assistant text. Used by both `runScenario` and free-form
+     * tasks like spec generation and fix proposal.
+     */
+    protected runConversation(systemPrompt: string, initialUserMessage: string, options?: {
+        maxToolResultBytes?: number;
+    }): Promise<string>;
     runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult>;
     private buildUserPrompt;
     protected parseResult(scenario: Scenario, finalText: string, startTime: number): ScenarioResult;

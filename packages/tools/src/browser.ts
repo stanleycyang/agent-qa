@@ -1,4 +1,4 @@
-import { chromium, firefox, webkit, Browser, Page, BrowserContext } from "playwright";
+import { chromium, firefox, webkit, Browser, Page, BrowserContext, Request } from "playwright";
 
 export type BrowserType = "chromium" | "firefox" | "webkit";
 
@@ -9,15 +9,29 @@ export interface BrowserLaunchOptions {
   recordVideoDir?: string;
 }
 
+interface NetworkLogEntry {
+  method: string;
+  url: string;
+  status?: number;
+  timestamp: number;
+}
+
 export class BrowserTool {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private consoleMessages: Array<{ type: string; text: string }> = [];
-  private networkLog: Array<{ method: string; url: string; status?: number; timestamp: number }> = [];
+  private networkLog: NetworkLogEntry[] = [];
+  /** Maps each Playwright Request to its log entry so the response handler is O(1). */
+  private requestEntries: WeakMap<Request, NetworkLogEntry> = new WeakMap();
   private currentVideoDir?: string;
 
   async launch(options: BrowserLaunchOptions | boolean = true): Promise<void> {
+    // Reset session state defensively in case launch is retried after a failure.
+    this.consoleMessages = [];
+    this.networkLog = [];
+    this.requestEntries = new WeakMap();
+
     // Backward compat: launch(true/false) = headless toggle on chromium
     const opts: BrowserLaunchOptions = typeof options === "boolean"
       ? { headless: options }
@@ -39,10 +53,12 @@ export class BrowserTool {
       this.consoleMessages.push({ type: "error", text: err.message });
     });
     this.page.on("request", (req) => {
-      this.networkLog.push({ method: req.method(), url: req.url(), timestamp: Date.now() });
+      const entry: NetworkLogEntry = { method: req.method(), url: req.url(), timestamp: Date.now() };
+      this.networkLog.push(entry);
+      this.requestEntries.set(req, entry);
     });
     this.page.on("response", (resp) => {
-      const entry = this.networkLog.find(e => e.url === resp.url() && e.status === undefined);
+      const entry = this.requestEntries.get(resp.request());
       if (entry) entry.status = resp.status();
     });
   }
@@ -200,16 +216,16 @@ export class BrowserTool {
   }
 
   async close(): Promise<void> {
-    if (this.context) {
-      await this.context.close();
+    try {
+      if (this.context) await this.context.close();
+      if (this.browser) await this.browser.close();
+    } finally {
       this.context = null;
-    }
-    if (this.browser) {
-      await this.browser.close();
       this.browser = null;
       this.page = null;
       this.consoleMessages = [];
       this.networkLog = [];
+      this.requestEntries = new WeakMap();
     }
   }
 }

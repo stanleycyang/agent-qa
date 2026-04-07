@@ -2,9 +2,9 @@ import * as path from "path";
 import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs, AgentQASpec, ScenarioResult } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent } from "@agentqa/agents";
 import { GitTool, BaselineStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
+import { executeScenario, resolveEnv } from "../scenario-runner.js";
 
 export interface BisectOptions {
   good: string;
@@ -31,6 +31,7 @@ export async function bisectCommand(
   const specsDir = path.join(rootDir, ".agentqa", "specs");
   const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
   const maxSteps = options.maxSteps ?? 20;
+  const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
 
   // Save current branch so we can restore it
   const originalBranch = (await git.getCurrentBranch()).branch;
@@ -83,7 +84,15 @@ export async function bisectCommand(
 
       let result: ScenarioResult;
       try {
-        result = await runOneScenario(targetSpec, targetScenario, agentModel, rootDir, config);
+        const envVars: Record<string, string> = {
+          base_url: resolveEnv(targetSpec.environment.base_url) ?? "",
+          api_url: resolveEnv(config.environment?.api_url) ?? "",
+        };
+        result = await executeScenario(targetSpec, targetScenario, envVars, {
+          agentModel,
+          rootDir,
+          baselineStore,
+        });
       } catch (err: any) {
         spinner.fail(`Step ${step}: error during run — ${err.message}`);
         await git.bisectReset();
@@ -126,37 +135,3 @@ export async function bisectCommand(
   }
 }
 
-async function runOneScenario(
-  spec: AgentQASpec,
-  scenario: any,
-  agentModel: string,
-  rootDir: string,
-  config: any,
-): Promise<ScenarioResult> {
-  const envVars: Record<string, string> = {
-    base_url: resolveEnv(spec.environment.base_url) ?? "",
-    api_url: resolveEnv(config.environment?.api_url) ?? "",
-  };
-
-  if (spec.environment.type === "web") {
-    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
-    const agent = new UIAgent({ model: agentModel, baselineStore, specName: spec.name });
-    await agent.initialize();
-    try {
-      return await agent.runScenario(scenario, envVars);
-    } finally {
-      await agent.cleanup();
-    }
-  } else if (spec.environment.type === "api") {
-    const agent = new APIAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  } else {
-    const agent = new LogicAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  }
-}
-
-function resolveEnv(value?: string): string | undefined {
-  if (!value) return undefined;
-  return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
-}

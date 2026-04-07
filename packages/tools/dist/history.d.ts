@@ -8,28 +8,57 @@ export interface HistoryEntry {
     viewport?: string;
     browser?: string;
 }
+export interface FlakinessResult {
+    rate: number;
+    runs: number;
+}
+export interface ScenarioStats {
+    spec: string;
+    scenario: string;
+    runs: number;
+    failures: number;
+    rate: number;
+    durations: number[];
+}
 /**
  * Append-only history of scenario runs. Used by flaky detection,
  * performance regression detection, and bisect.
+ *
+ * Lazy-loads on first read; subsequent operations work on the in-memory
+ * cache. Callers should call `flush()` once at the end of a run to persist
+ * appended entries — `appendBuffered` does NOT touch disk per call.
  */
 export declare class HistoryStore {
     private historyPath;
+    private entries;
+    private dirty;
     constructor(historyPath: string);
-    append(entry: HistoryEntry): Promise<void>;
+    private ensureLoaded;
+    /** Public read of all entries (for `flaky` command, reports). */
     load(): Promise<HistoryEntry[]>;
-    getRunsFor(spec: string, scenario: string, limit?: number): Promise<HistoryEntry[]>;
     /**
-     * Compute flakiness for a scenario.
-     * Returns 0-1 fail rate over the last N runs.
+     * Buffer a new entry in memory. Caller must call `flush()` to persist.
+     * This is the hot-path API used by the run command.
      */
-    getFlakiness(spec: string, scenario: string, window?: number): Promise<{
-        rate: number;
-        runs: number;
-    }>;
+    appendBuffered(entry: HistoryEntry): Promise<void>;
+    /** Persist the in-memory entries to disk if dirty. */
+    flush(): Promise<void>;
+    /** Convenience: append + flush. Use only outside hot paths. */
+    append(entry: HistoryEntry): Promise<void>;
+    private filterRuns;
     /**
-     * Get median duration for a scenario over the last N runs.
-     * Returns null if insufficient history (< 5 runs).
+     * Compute flakiness for a scenario over the most recent `window` runs.
+     */
+    getFlakiness(spec: string, scenario: string, window?: number): Promise<FlakinessResult>;
+    /**
+     * Median duration of passing runs over the most recent `window` entries.
+     * Returns null if there's insufficient data (< 5 runs or < 3 passing).
      */
     getMedianDuration(spec: string, scenario: string, window?: number): Promise<number | null>;
+    /**
+     * Group all entries by (spec, scenario) and compute per-scenario stats.
+     * Single-pass over the history. Used by the `flaky` command.
+     */
+    getAllStats(): Promise<ScenarioStats[]>;
 }
 //# sourceMappingURL=history.d.ts.map

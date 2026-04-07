@@ -1,119 +1,17 @@
-import { FilesystemTool, GitTool } from "@agentqa/tools";
-import { BaseAgent } from "./base-agent.js";
+import { LogicAgent } from "./logic-agent.js";
 /**
  * Generates AgentQA YAML specs from various inputs (git diff, Figma, Sentry, Linear/Jira).
- * Unlike test-execution agents, this agent does NOT run a scenario — it produces specs.
- * The caller invokes generateFromContext() with a context payload, and the agent
- * outputs YAML blocks that can be written to disk.
+ * Inherits the read/grep/git toolset from LogicAgent. Unlike test-execution
+ * agents, the caller invokes `generateFromContext()` and gets back the raw
+ * agent text containing fenced YAML blocks.
  */
-export class SpecGeneratorAgent extends BaseAgent {
-    fs;
-    git;
-    constructor(model) {
-        super(model);
-        this.fs = new FilesystemTool();
-        this.git = new GitTool();
-    }
-    getTools() {
-        return [
-            {
-                name: "read_file",
-                description: "Read a file to understand its purpose and behavior.",
-                input_schema: {
-                    type: "object",
-                    properties: { path: { type: "string" } },
-                    required: ["path"],
-                },
-            },
-            {
-                name: "list_dir",
-                description: "List files in a directory.",
-                input_schema: {
-                    type: "object",
-                    properties: { path: { type: "string" } },
-                    required: ["path"],
-                },
-            },
-            {
-                name: "git_diff",
-                description: "Get the git diff between two refs (or unstaged changes).",
-                input_schema: {
-                    type: "object",
-                    properties: {
-                        ref1: { type: "string" },
-                        ref2: { type: "string" },
-                    },
-                    required: [],
-                },
-            },
-            {
-                name: "list_changed_files",
-                description: "List files that changed between two git refs.",
-                input_schema: {
-                    type: "object",
-                    properties: {
-                        ref1: { type: "string" },
-                        ref2: { type: "string" },
-                    },
-                    required: [],
-                },
-            },
-        ];
-    }
-    async handleToolCall(name, input) {
-        switch (name) {
-            case "read_file":
-                return this.fs.readFile(input.path);
-            case "list_dir":
-                return this.fs.listDir(input.path);
-            case "git_diff":
-                return this.git.getDiff(input.ref1, input.ref2);
-            case "list_changed_files":
-                return this.git.listChangedFiles(input.ref1, input.ref2);
-            default:
-                throw new Error(`Unknown tool: ${name}`);
-        }
-    }
+export class SpecGeneratorAgent extends LogicAgent {
     buildSystemPrompt(_scenario) {
         return SPEC_GENERATOR_PROMPT;
     }
-    /**
-     * Generate one or more spec YAML blocks from a context payload.
-     * Returns the raw agent output text containing fenced YAML blocks.
-     */
     async generateFromContext(context) {
-        const messages = [
-            { role: "user", content: context },
-        ];
-        while (true) {
-            const response = await this.client.messages.create({
-                model: this.model,
-                max_tokens: 4096,
-                system: SPEC_GENERATOR_PROMPT,
-                tools: this.getTools(),
-                messages,
-            });
-            messages.push({ role: "assistant", content: response.content });
-            if (response.stop_reason === "end_turn") {
-                return response.content
-                    .filter((b) => b.type === "text")
-                    .map(b => b.text)
-                    .join("\n");
-            }
-            if (response.stop_reason === "tool_use") {
-                const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
-                const toolResults = [];
-                for (const toolUse of toolUseBlocks) {
-                    const output = await this.handleToolCall(toolUse.name, toolUse.input);
-                    toolResults.push({
-                        type: "tool_result",
-                        tool_use_id: toolUse.id,
-                        content: JSON.stringify(output).substring(0, 8000),
-                    });
-                }
-                messages.push({ role: "user", content: toolResults });
-            }
-        }
+        this.toolCalls = [];
+        return this.runConversation(SPEC_GENERATOR_PROMPT, context, { maxToolResultBytes: 8000 });
     }
 }
 const SPEC_GENERATOR_PROMPT = `You are a senior QA engineer who writes AgentQA test specs.
@@ -156,11 +54,6 @@ scenarios:
 
 ## Output format
 After exploring the context with the available tools (read_file, git_diff, etc.), output one or more YAML specs as fenced code blocks:
-
-\`\`\`yaml
-name: ...
-...
-\`\`\`
 
 \`\`\`yaml
 name: ...

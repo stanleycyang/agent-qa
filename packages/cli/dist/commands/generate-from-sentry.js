@@ -17,10 +17,13 @@ export async function buildSentryContext(issueIdOrEmpty, config) {
     }
     const headers = { Authorization: `Bearer ${token}` };
     const baseUrl = "https://sentry.io/api/0";
-    // Resolve which issue(s) to fetch
+    // Resolve which issue(s) to fetch. When the user passes --from-sentry with no
+    // value, Commander supplies `true`; with --from-sentry abc123 it supplies a string.
+    const explicitId = typeof issueIdOrEmpty === "string" && issueIdOrEmpty.length > 0
+        ? issueIdOrEmpty
+        : null;
     const issueIds = [];
-    const isPlaceholder = !issueIdOrEmpty || issueIdOrEmpty === "true";
-    if (isPlaceholder) {
+    if (!explicitId) {
         // Fetch top unresolved issues
         try {
             const resp = await axios.get(`${baseUrl}/projects/${org}/${project}/issues/`, {
@@ -36,7 +39,7 @@ export async function buildSentryContext(issueIdOrEmpty, config) {
         }
     }
     else {
-        issueIds.push(issueIdOrEmpty);
+        issueIds.push(explicitId);
     }
     if (issueIds.length === 0) {
         throw new Error("No Sentry issues found");

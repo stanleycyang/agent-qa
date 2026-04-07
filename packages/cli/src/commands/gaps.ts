@@ -1,7 +1,7 @@
 import * as path from "path";
 import chalk from "chalk";
 import ora from "ora";
-import { loadAllSpecs, analyzeChangedFiles, AgentQASpec } from "@agentqa/core";
+import { loadAllSpecs, AgentQASpec } from "@agentqa/core";
 import { GitTool } from "@agentqa/tools";
 
 export interface GapsOptions {
@@ -36,18 +36,6 @@ export async function gapsCommand(rootDir: string = process.cwd(), options: Gaps
     return;
   }
 
-  const analysis = analyzeChangedFiles(changedFiles, specEntries);
-  const matchedFiles = new Set<string>();
-  for (const { spec } of analysis.matchedSpecs) {
-    if (!spec.trigger.paths) continue;
-    for (const file of changedFiles) {
-      for (const _ of spec.trigger.paths) {
-        matchedFiles.add(file);
-      }
-    }
-  }
-
-  // For per-file matching we need to recheck which files match which specs
   const { minimatch } = await import("minimatch");
   const fileToSpecs = new Map<string, string[]>();
   for (const file of changedFiles) {

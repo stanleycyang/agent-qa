@@ -54,6 +54,11 @@ export interface ScenarioResult {
         current_ms: number;
         ratio: number;
     };
+    healed_selectors?: Array<{
+        original: string;
+        healed: string;
+        reasoning: string;
+    }>;
 }
 export interface SpecResult {
     spec: string;

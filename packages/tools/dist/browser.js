@@ -5,8 +5,14 @@ export class BrowserTool {
     page = null;
     consoleMessages = [];
     networkLog = [];
+    /** Maps each Playwright Request to its log entry so the response handler is O(1). */
+    requestEntries = new WeakMap();
     currentVideoDir;
     async launch(options = true) {
+        // Reset session state defensively in case launch is retried after a failure.
+        this.consoleMessages = [];
+        this.networkLog = [];
+        this.requestEntries = new WeakMap();
         // Backward compat: launch(true/false) = headless toggle on chromium
         const opts = typeof options === "boolean"
             ? { headless: options }
@@ -27,10 +33,12 @@ export class BrowserTool {
             this.consoleMessages.push({ type: "error", text: err.message });
         });
         this.page.on("request", (req) => {
-            this.networkLog.push({ method: req.method(), url: req.url(), timestamp: Date.now() });
+            const entry = { method: req.method(), url: req.url(), timestamp: Date.now() };
+            this.networkLog.push(entry);
+            this.requestEntries.set(req, entry);
         });
         this.page.on("response", (resp) => {
-            const entry = this.networkLog.find(e => e.url === resp.url() && e.status === undefined);
+            const entry = this.requestEntries.get(resp.request());
             if (entry)
                 entry.status = resp.status();
         });
@@ -188,16 +196,19 @@ export class BrowserTool {
         return { selector: candidates[0] ?? null, matches: candidates };
     }
     async close() {
-        if (this.context) {
-            await this.context.close();
-            this.context = null;
+        try {
+            if (this.context)
+                await this.context.close();
+            if (this.browser)
+                await this.browser.close();
         }
-        if (this.browser) {
-            await this.browser.close();
+        finally {
+            this.context = null;
             this.browser = null;
             this.page = null;
             this.consoleMessages = [];
             this.networkLog = [];
+            this.requestEntries = new WeakMap();
         }
     }
 }

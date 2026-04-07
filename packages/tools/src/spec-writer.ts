@@ -21,18 +21,19 @@ export async function writeSpec(
   const filename = options.filename ?? `${safeName}.yaml`;
   const filePath = path.join(specsDir, filename);
 
-  if (!options.force) {
-    try {
-      await fs.access(filePath);
-      throw new Error(`Spec file already exists: ${filePath} (use --force to overwrite)`);
-    } catch (err: any) {
-      if (err.code !== "ENOENT") throw err;
-    }
-  }
-
   await fs.mkdir(specsDir, { recursive: true });
   const yamlContent = yaml.dump(spec, { lineWidth: 100, noRefs: true });
-  await fs.writeFile(filePath, yamlContent);
+
+  try {
+    // The "wx" flag fails atomically with EEXIST if the file already exists,
+    // avoiding a TOCTOU race between an existence check and the write.
+    await fs.writeFile(filePath, yamlContent, { flag: options.force ? "w" : "wx" });
+  } catch (err: any) {
+    if (err.code === "EEXIST") {
+      throw new Error(`Spec file already exists: ${filePath} (use --force to overwrite)`);
+    }
+    throw err;
+  }
 
   return { filePath, name };
 }

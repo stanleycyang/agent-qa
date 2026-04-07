@@ -1,10 +1,11 @@
 import * as path from "path";
 import chalk from "chalk";
 import ora from "ora";
-import { loadAllSpecs, AgentQASpec, ScenarioResult } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent, FixAgent } from "@agentqa/agents";
+import { loadAllSpecs, ScenarioResult } from "@agentqa/core";
+import { FixAgent } from "@agentqa/agents";
 import { BaselineStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
+import { executeScenario, resolveEnv } from "../scenario-runner.js";
 
 export interface FixOptions {
   spec?: string;
@@ -23,6 +24,7 @@ export async function fixCommand(
   const config = await loadConfig(rootDir);
   const specsDir = path.join(rootDir, ".agentqa", "specs");
   const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
+  const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
 
   const spinner = ora("Loading specs...").start();
   const specEntries = await loadAllSpecs(specsDir);
@@ -37,7 +39,15 @@ export async function fixCommand(
     for (const scenario of spec.scenarios) {
       const scenarioSpinner = ora(`  ${spec.name} → ${scenario.name}`).start();
       try {
-        const result = await runOneScenario(spec, scenario, agentModel, rootDir, config);
+        const envVars: Record<string, string> = {
+          base_url: resolveEnv(spec.environment.base_url) ?? "",
+          api_url: resolveEnv(config.environment?.api_url) ?? "",
+        };
+        const result = await executeScenario(spec, scenario, envVars, {
+          agentModel,
+          rootDir,
+          baselineStore,
+        });
         if (result.status !== "pass") {
           scenarioSpinner.fail(chalk.red(`  ❌ ${spec.name} → ${scenario.name}`));
           failures.push({ spec: spec.name, result });
@@ -88,37 +98,3 @@ export async function fixCommand(
   }
 }
 
-async function runOneScenario(
-  spec: AgentQASpec,
-  scenario: any,
-  agentModel: string,
-  rootDir: string,
-  config: any,
-): Promise<ScenarioResult> {
-  const envVars: Record<string, string> = {
-    base_url: resolveEnv(spec.environment.base_url) ?? "",
-    api_url: resolveEnv(config.environment?.api_url) ?? "",
-  };
-
-  if (spec.environment.type === "web") {
-    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
-    const agent = new UIAgent({ model: agentModel, baselineStore, specName: spec.name });
-    await agent.initialize();
-    try {
-      return await agent.runScenario(scenario, envVars);
-    } finally {
-      await agent.cleanup();
-    }
-  } else if (spec.environment.type === "api") {
-    const agent = new APIAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  } else {
-    const agent = new LogicAgent(agentModel);
-    return agent.runScenario(scenario, envVars);
-  }
-}
-
-function resolveEnv(value?: string): string | undefined {
-  if (!value) return undefined;
-  return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
-}

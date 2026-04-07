@@ -62,7 +62,7 @@ function parseFigmaUrl(url) {
         return null;
     const fileKey = match[1];
     const nodeMatch = url.match(/node-id=([0-9-]+)/);
-    const nodeId = nodeMatch ? nodeMatch[1].replace("-", ":") : undefined;
+    const nodeId = nodeMatch ? nodeMatch[1].replace(/-/g, ":") : undefined;
     return { fileKey, nodeId };
 }
 function summarizeFigmaNode(node, depth, maxDepth) {

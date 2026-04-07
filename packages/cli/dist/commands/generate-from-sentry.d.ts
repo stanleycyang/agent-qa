@@ -6,5 +6,5 @@ import { AgentQAConfig } from "@agentqa/core";
  * If issueIdOrEmpty is empty/undefined, fetches the top 5 unresolved issues.
  * If a specific issue ID is given, fetches that issue's events and breadcrumbs.
  */
-export declare function buildSentryContext(issueIdOrEmpty: string | undefined, config: AgentQAConfig): Promise<string>;
+export declare function buildSentryContext(issueIdOrEmpty: string | boolean | undefined, config: AgentQAConfig): Promise<string>;
 //# sourceMappingURL=generate-from-sentry.d.ts.map

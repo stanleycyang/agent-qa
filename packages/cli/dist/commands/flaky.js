@@ -1,42 +1,24 @@
 import * as path from "path";
 import chalk from "chalk";
 import { HistoryStore } from "@agentqa/tools";
+const MIN_RUNS = 5;
+const MIN_RATE = 0.05;
+const MAX_RATE = 0.95;
 export async function flakyCommand(rootDir = process.cwd()) {
     const history = new HistoryStore(path.join(rootDir, ".agentqa", "history.json"));
-    const entries = await history.load();
-    if (entries.length === 0) {
+    const stats = await history.getAllStats();
+    if (stats.length === 0) {
         console.log(chalk.gray("No history yet. Run `agentqa run` a few times to build history."));
         return;
     }
-    // Group entries by (spec, scenario)
-    const groups = new Map();
-    for (const e of entries) {
-        const key = `${e.spec}::${e.scenario}`;
-        if (!groups.has(key)) {
-            groups.set(key, { spec: e.spec, scenario: e.scenario, runs: 0, failures: 0, durations: [] });
-        }
-        const g = groups.get(key);
-        g.runs++;
-        if (e.status !== "pass")
-            g.failures++;
-        g.durations.push(e.duration_ms);
-    }
-    // Compute flakiness for each
-    const flaky = [];
-    for (const g of groups.values()) {
-        if (g.runs < 5)
-            continue;
-        const rate = g.failures / g.runs;
-        if (rate > 0.05 && rate < 0.95) {
-            flaky.push({ spec: g.spec, scenario: g.scenario, rate, runs: g.runs });
-        }
-    }
+    const flaky = stats
+        .filter(s => s.runs >= MIN_RUNS && s.rate > MIN_RATE && s.rate < MAX_RATE)
+        .sort((a, b) => b.rate - a.rate);
     if (flaky.length === 0) {
         console.log(chalk.green("✅ No flaky scenarios detected."));
-        console.log(chalk.gray(`(analyzed ${entries.length} runs across ${groups.size} scenarios)`));
+        console.log(chalk.gray(`(analyzed ${stats.reduce((n, s) => n + s.runs, 0)} runs across ${stats.length} scenarios)`));
         return;
     }
-    flaky.sort((a, b) => b.rate - a.rate);
     console.log(chalk.bold(`🟡 ${flaky.length} flaky scenario(s):\n`));
     for (const f of flaky) {
         const pct = (f.rate * 100).toFixed(0);

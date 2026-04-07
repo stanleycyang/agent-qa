@@ -1,16 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { Scenario, ScenarioResult } from "@agentqa/core";
-import { BaseAgent } from "./base-agent.js";
+import { LogicAgent } from "./logic-agent.js";
 /**
  * Reads a failing scenario result and proposes a code fix.
- * Has access to filesystem + git tools and (when enableWrites is set) write_file.
+ * Inherits the full read/grep/git toolset from LogicAgent and adds the
+ * built-in write_file tool when `enableWrites` is set.
  */
-export declare class FixAgent extends BaseAgent {
-    private fs;
-    private git;
-    constructor(model?: string);
-    getTools(): Anthropic.Tool[];
-    handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
+export declare class FixAgent extends LogicAgent {
     buildSystemPrompt(_scenario: Scenario): string;
     /**
      * Investigate a failing scenario and propose (or apply) a fix.

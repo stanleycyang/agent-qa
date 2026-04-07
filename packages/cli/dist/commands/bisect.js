@@ -2,9 +2,9 @@ import * as path from "path";
 import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent } from "@agentqa/agents";
 import { GitTool, BaselineStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
+import { executeScenario, resolveEnv } from "../scenario-runner.js";
 export async function bisectCommand(scenarioName, rootDir = process.cwd(), options) {
     if (!process.env.ANTHROPIC_API_KEY) {
         console.error(chalk.red("Error: ANTHROPIC_API_KEY environment variable is not set."));
@@ -19,6 +19,7 @@ export async function bisectCommand(scenarioName, rootDir = process.cwd(), optio
     const specsDir = path.join(rootDir, ".agentqa", "specs");
     const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
     const maxSteps = options.maxSteps ?? 20;
+    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
     // Save current branch so we can restore it
     const originalBranch = (await git.getCurrentBranch()).branch;
     console.log(chalk.gray(`Current branch: ${originalBranch}`));
@@ -66,7 +67,15 @@ export async function bisectCommand(scenarioName, rootDir = process.cwd(), optio
             const spinner = ora(`Step ${step}: testing ${sha.substring(0, 8)} (${info.message})`).start();
             let result;
             try {
-                result = await runOneScenario(targetSpec, targetScenario, agentModel, rootDir, config);
+                const envVars = {
+                    base_url: resolveEnv(targetSpec.environment.base_url) ?? "",
+                    api_url: resolveEnv(config.environment?.api_url) ?? "",
+                };
+                result = await executeScenario(targetSpec, targetScenario, envVars, {
+                    agentModel,
+                    rootDir,
+                    baselineStore,
+                });
             }
             catch (err) {
                 spinner.fail(`Step ${step}: error during run — ${err.message}`);
@@ -108,35 +117,5 @@ export async function bisectCommand(scenarioName, rootDir = process.cwd(), optio
         catch { }
         process.exit(1);
     }
-}
-async function runOneScenario(spec, scenario, agentModel, rootDir, config) {
-    const envVars = {
-        base_url: resolveEnv(spec.environment.base_url) ?? "",
-        api_url: resolveEnv(config.environment?.api_url) ?? "",
-    };
-    if (spec.environment.type === "web") {
-        const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
-        const agent = new UIAgent({ model: agentModel, baselineStore, specName: spec.name });
-        await agent.initialize();
-        try {
-            return await agent.runScenario(scenario, envVars);
-        }
-        finally {
-            await agent.cleanup();
-        }
-    }
-    else if (spec.environment.type === "api") {
-        const agent = new APIAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-    else {
-        const agent = new LogicAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-}
-function resolveEnv(value) {
-    if (!value)
-        return undefined;
-    return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
 }
 //# sourceMappingURL=bisect.js.map

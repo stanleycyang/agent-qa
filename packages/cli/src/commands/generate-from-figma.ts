@@ -69,7 +69,7 @@ function parseFigmaUrl(url: string): { fileKey: string; nodeId?: string } | null
   if (!match) return null;
   const fileKey = match[1];
   const nodeMatch = url.match(/node-id=([0-9-]+)/);
-  const nodeId = nodeMatch ? nodeMatch[1].replace("-", ":") : undefined;
+  const nodeId = nodeMatch ? nodeMatch[1].replace(/-/g, ":") : undefined;
   return { fileKey, nodeId };
 }
 

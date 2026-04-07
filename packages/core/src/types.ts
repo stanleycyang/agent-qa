@@ -52,6 +52,7 @@ export interface ScenarioResult {
   network_path?: string;
   flaky?: { rate: number; runs: number };
   perf_regression?: { baseline_ms: number; current_ms: number; ratio: number };
+  healed_selectors?: Array<{ original: string; healed: string; reasoning: string }>;
 }
 
 export interface SpecResult {

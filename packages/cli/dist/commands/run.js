@@ -3,9 +3,10 @@ import * as fs from "fs/promises";
 import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent, ReporterAgent, A11yAgent, SecurityAgent } from "@agentqa/agents";
+import { ReporterAgent } from "@agentqa/agents";
 import { BaselineStore, HistoryStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
+import { executeScenario, resolveEnv } from "../scenario-runner.js";
 export async function runCommand(specName, rootDir = process.cwd(), options = {}) {
     const { verbose = false, json = false, dryRun = false, watch = false } = options;
     const log = json ? (..._args) => { } : console.log;
@@ -106,23 +107,30 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
     if (options.updateBaselines) {
         log(chalk.blue("📸 Baseline update mode — all baselines will be refreshed\n"));
     }
-    // Run specs with concurrency
-    const allResults = await runSpecsConcurrently(specEntries, {
-        timeoutMs,
-        maxRetries,
-        screenshotOnFailure,
-        agentModel,
-        rootDir,
-        concurrency,
-        verbose,
-        json,
-        baselineStore,
-        historyStore,
-        perfThreshold,
-        flakyThreshold,
-        recordVideoOnFailure,
-        updateBaselines: options.updateBaselines ?? false,
-    }, log, config);
+    // Run specs with concurrency. Always flush history afterwards so a crash
+    // mid-run still preserves the entries we already buffered.
+    let allResults;
+    try {
+        allResults = await runSpecsConcurrently(specEntries, {
+            timeoutMs,
+            maxRetries,
+            screenshotOnFailure,
+            agentModel,
+            rootDir,
+            concurrency,
+            verbose,
+            json,
+            baselineStore,
+            historyStore,
+            perfThreshold,
+            flakyThreshold,
+            recordVideoOnFailure,
+            updateBaselines: options.updateBaselines ?? false,
+        }, log, config);
+    }
+    finally {
+        await historyStore.flush();
+    }
     // Summary
     const summary = reporter.generateSummary(allResults);
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration_ms, 0);
@@ -138,9 +146,6 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
     if (summary.failed > 0) {
         process.exit(1);
     }
-}
-function sanitize(s) {
-    return s.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 async function runSpecsConcurrently(specEntries, runConfig, log, config) {
     const { concurrency } = runConfig;
@@ -190,7 +195,16 @@ async function runSpec(entry, runConfig, log, config) {
                     base_url: resolveEnv(spec.environment.base_url) ?? "",
                     api_url: resolveEnv(config.environment?.api_url) ?? "",
                 };
-                const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, runConfig, matrixEntry.viewport, matrixEntry.browser), maxRetries, scenario.name, timeoutMs, log);
+                const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, {
+                    agentModel: runConfig.agentModel,
+                    rootDir: runConfig.rootDir,
+                    baselineStore: runConfig.baselineStore,
+                    updateBaselines: runConfig.updateBaselines,
+                    screenshotOnFailure: runConfig.screenshotOnFailure,
+                    recordVideoOnFailure: runConfig.recordVideoOnFailure,
+                    matrixViewport: matrixEntry.viewport,
+                    matrixBrowser: matrixEntry.browser,
+                }), maxRetries, scenario.name, timeoutMs, log);
                 // Annotate with flaky and perf regression info from history
                 const flakiness = await historyStore.getFlakiness(spec.name, scenario.name, 10);
                 if (flakiness.runs >= 5 && flakiness.rate >= flakyThreshold && flakiness.rate < 0.9) {
@@ -204,8 +218,8 @@ async function runSpec(entry, runConfig, log, config) {
                         ratio: result.duration_ms / median,
                     };
                 }
-                // Append to history (after annotation so we don't compare against ourselves)
-                await historyStore.append({
+                // Buffer in-memory; flushed once at the end of the run.
+                await historyStore.appendBuffered({
                     spec: spec.name,
                     scenario: scenario.name,
                     status: result.status,
@@ -264,107 +278,25 @@ async function runSpec(entry, runConfig, log, config) {
         duration_ms: Date.now() - specStart,
     };
 }
-async function executeScenario(spec, scenario, envVars, runConfig, matrixViewport, matrixBrowser) {
-    const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
-    if (spec.environment.type === "web" || spec.environment.type === "a11y") {
-        const AgentClass = spec.environment.type === "a11y" ? A11yAgent : UIAgent;
-        const recordVideo = runConfig.recordVideoOnFailure;
-        const replayDir = recordVideo
-            ? path.join(rootDir, ".agentqa", "replays", `${sanitize(spec.name)}_${sanitize(scenario.name)}_${Date.now()}`)
-            : undefined;
-        if (replayDir) {
-            await fs.mkdir(replayDir, { recursive: true });
-        }
-        const agent = new AgentClass({
-            model: agentModel,
-            baselineStore,
-            specName: spec.name,
-            updateBaselines,
-            viewport: matrixViewport,
-            browserType: matrixBrowser,
-            recordVideoDir: replayDir,
-        });
-        await agent.initialize();
-        let result;
-        try {
-            result = await agent.runScenario(scenario, envVars);
-            if (screenshotOnFailure && result.status !== "pass") {
-                try {
-                    const screenshotDir = path.join(rootDir, ".agentqa", "screenshots");
-                    await fs.mkdir(screenshotDir, { recursive: true });
-                    const matrixSuffix = matrixViewport || matrixBrowser
-                        ? `_${matrixViewport?.name ?? ""}${matrixBrowser ? "-" + matrixBrowser : ""}`
-                        : "";
-                    const filename = `${spec.name}_${scenario.name}${matrixSuffix}_${Date.now()}.png`.replace(/\s+/g, "-");
-                    const screenshotPath = path.join(screenshotDir, filename);
-                    await agent.captureScreenshot(screenshotPath);
-                    result.screenshots = [screenshotPath];
-                }
-                catch {
-                    // Screenshot capture is best-effort
-                }
-            }
-            // Persist replay artifacts on failure
-            if (recordVideo && replayDir && result.status !== "pass") {
-                try {
-                    const browser = agent.getBrowser();
-                    await fs.writeFile(path.join(replayDir, "network.json"), JSON.stringify(browser.getNetworkLog(), null, 2));
-                    await fs.writeFile(path.join(replayDir, "console.json"), JSON.stringify(browser.getConsoleMessages(), null, 2));
-                    await fs.writeFile(path.join(replayDir, "trace.json"), JSON.stringify(result.trace ?? [], null, 2));
-                    result.network_path = path.join(replayDir, "network.json");
-                }
-                catch { }
-            }
-            const healEvents = agent.getHealEvents();
-            if (healEvents.length > 0) {
-                result.healed_selectors = healEvents;
-            }
-        }
-        finally {
-            await agent.cleanup();
-            // Get video path AFTER cleanup (Playwright finalizes the file then)
-            if (recordVideo && replayDir && result && result.status !== "pass") {
-                try {
-                    const fsSync = await import("fs");
-                    const files = fsSync.readdirSync(replayDir).filter(f => f.endsWith(".webm"));
-                    if (files.length > 0) {
-                        result.video_path = path.join(replayDir, files[0]);
-                    }
-                }
-                catch { }
-            }
-        }
-        return result;
-    }
-    else if (spec.environment.type === "api") {
-        const agent = new APIAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-    else if (spec.environment.type === "security") {
-        const agent = new SecurityAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-    else {
-        const agent = new LogicAgent(agentModel);
-        return agent.runScenario(scenario, envVars);
-    }
-}
 /** Expand a single scenario into the configured viewport × browser matrix. */
 function expandMatrix(spec, scenario, config) {
     if (spec.environment.type !== "web") {
         return [{}];
     }
-    const viewports = config.execution?.viewports;
-    const browsers = config.execution?.browsers;
-    if (!viewports?.length && !browsers?.length) {
+    const viewports = config.execution?.viewports?.length
+        ? config.execution.viewports
+        : [undefined];
+    const browsers = config.execution?.browsers?.length
+        ? config.execution.browsers
+        : [undefined];
+    if (viewports.length === 1 && viewports[0] === undefined &&
+        browsers.length === 1 && browsers[0] === undefined) {
         return [{}];
     }
-    const vps = viewports?.length ? viewports : [undefined];
-    const brs = browsers?.length ? browsers : [undefined];
     const matrix = [];
-    for (const vp of vps) {
-        for (const br of brs) {
-            matrix.push({ viewport: vp, browser: br });
+    for (const viewport of viewports) {
+        for (const browser of browsers) {
+            matrix.push({ viewport, browser });
         }
     }
     return matrix;
@@ -461,10 +393,5 @@ async function runWatchMode(specName, rootDir, specsDir, config, options) {
             resolve();
         });
     });
-}
-function resolveEnv(value) {
-    if (!value)
-        return undefined;
-    return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
 }
 //# sourceMappingURL=run.js.map

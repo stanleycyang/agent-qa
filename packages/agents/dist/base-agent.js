@@ -48,54 +48,69 @@ export class BaseAgent {
         await fs.writeFile(fullPath, input.content);
         return { success: true, path: fullPath };
     }
-    async runScenario(scenario, environment) {
-        this.toolCalls = [];
-        const start = Date.now();
-        const messages = [];
-        const userPrompt = this.buildUserPrompt(scenario, environment);
-        messages.push({ role: "user", content: userPrompt });
+    /**
+     * Drive a conversation loop with the model: send the prompt, handle any
+     * tool calls (including the built-in write_file when allowed), and return
+     * the final assistant text. Used by both `runScenario` and free-form
+     * tasks like spec generation and fix proposal.
+     */
+    async runConversation(systemPrompt, initialUserMessage, options = {}) {
+        const maxBytes = options.maxToolResultBytes ?? Infinity;
+        const messages = [
+            { role: "user", content: initialUserMessage },
+        ];
+        const tools = [...this.getTools(), ...this.getWriteTools()];
         while (true) {
             const response = await this.client.messages.create({
                 model: this.model,
                 max_tokens: 4096,
-                system: this.buildSystemPrompt(scenario),
-                tools: [...this.getTools(), ...this.getWriteTools()],
+                system: systemPrompt,
+                tools,
                 messages,
             });
             messages.push({ role: "assistant", content: response.content });
             if (response.stop_reason === "end_turn") {
-                const finalText = response.content
+                return response.content
                     .filter((b) => b.type === "text")
                     .map(b => b.text)
                     .join("\n");
-                return this.parseResult(scenario, finalText, start);
             }
-            if (response.stop_reason === "tool_use") {
-                const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
-                const toolResults = [];
-                for (const toolUse of toolUseBlocks) {
-                    let output;
-                    if (toolUse.name === "write_file") {
-                        output = await this.handleWriteTool(toolUse.name, toolUse.input);
-                    }
-                    else {
-                        output = await this.handleToolCall(toolUse.name, toolUse.input);
-                    }
-                    this.toolCalls.push({
-                        tool: toolUse.name,
-                        input: toolUse.input,
-                        output,
-                        timestamp: Date.now(),
-                    });
-                    toolResults.push({
-                        type: "tool_result",
-                        tool_use_id: toolUse.id,
-                        content: JSON.stringify(output),
-                    });
-                }
-                messages.push({ role: "user", content: toolResults });
+            if (response.stop_reason !== "tool_use") {
+                // Unexpected stop reason — return whatever text we have
+                return response.content
+                    .filter((b) => b.type === "text")
+                    .map(b => b.text)
+                    .join("\n");
             }
+            const toolUseBlocks = response.content.filter((b) => b.type === "tool_use");
+            const toolResults = [];
+            for (const toolUse of toolUseBlocks) {
+                const input = toolUse.input;
+                const output = toolUse.name === "write_file"
+                    ? await this.handleWriteTool(toolUse.name, input)
+                    : await this.handleToolCall(toolUse.name, input);
+                this.toolCalls.push({
+                    tool: toolUse.name,
+                    input,
+                    output,
+                    timestamp: Date.now(),
+                });
+                const serialized = JSON.stringify(output);
+                toolResults.push({
+                    type: "tool_result",
+                    tool_use_id: toolUse.id,
+                    content: serialized.length > maxBytes ? serialized.substring(0, maxBytes) : serialized,
+                });
+            }
+            messages.push({ role: "user", content: toolResults });
         }
+    }
+    async runScenario(scenario, environment) {
+        this.toolCalls = [];
+        const start = Date.now();
+        const userPrompt = this.buildUserPrompt(scenario, environment);
+        const finalText = await this.runConversation(this.buildSystemPrompt(scenario), userPrompt);
+        return this.parseResult(scenario, finalText, start);
     }
     buildUserPrompt(scenario, environment) {
         const steps = scenario.steps?.join("\n") || scenario.review?.join("\n") || "";

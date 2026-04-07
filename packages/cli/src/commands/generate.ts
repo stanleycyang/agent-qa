@@ -12,7 +12,8 @@ export interface GenerateOptions {
   dryRun?: boolean;
   force?: boolean;
   fromFigma?: string;
-  fromSentry?: string;
+  /** True (no specific issue) or a Sentry issue ID. */
+  fromSentry?: string | boolean;
   fromIssue?: string;
 }
 
@@ -149,17 +150,21 @@ ${target}
 Read relevant files in the codebase to understand the implementation, then output one or more YAML specs.`;
   }
 
-  // Default: use git diff against the configured ref
+  // Default: use git diff against the configured ref. Fall back to unstaged
+  // changes if the ref doesn't exist locally.
   try {
-    const diffResult = await git.getDiff(ref, "HEAD");
+    const [diffResult, changedResult] = await Promise.all([
+      git.getDiff(ref, "HEAD"),
+      git.listChangedFiles(ref, "HEAD"),
+    ]);
     diff = diffResult.diff;
-    const changedResult = await git.listChangedFiles(ref, "HEAD");
     changedFiles = changedResult.files;
   } catch {
-    // Fall back to unstaged changes
-    const diffResult = await git.getDiff();
+    const [diffResult, changedResult] = await Promise.all([
+      git.getDiff(),
+      git.listChangedFiles(),
+    ]);
     diff = diffResult.diff;
-    const changedResult = await git.listChangedFiles();
     changedFiles = changedResult.files;
   }
 

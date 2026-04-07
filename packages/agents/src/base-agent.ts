@@ -57,64 +57,81 @@ export abstract class BaseAgent {
   abstract handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
   abstract buildSystemPrompt(scenario: Scenario): string;
 
-  async runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult> {
-    this.toolCalls = [];
-    const start = Date.now();
-    const messages: Anthropic.MessageParam[] = [];
-    
-    const userPrompt = this.buildUserPrompt(scenario, environment);
-    messages.push({ role: "user", content: userPrompt });
-    
+  /**
+   * Drive a conversation loop with the model: send the prompt, handle any
+   * tool calls (including the built-in write_file when allowed), and return
+   * the final assistant text. Used by both `runScenario` and free-form
+   * tasks like spec generation and fix proposal.
+   */
+  protected async runConversation(
+    systemPrompt: string,
+    initialUserMessage: string,
+    options: { maxToolResultBytes?: number } = {},
+  ): Promise<string> {
+    const maxBytes = options.maxToolResultBytes ?? Infinity;
+    const messages: Anthropic.MessageParam[] = [
+      { role: "user", content: initialUserMessage },
+    ];
+    const tools: Anthropic.Tool[] = [...this.getTools(), ...this.getWriteTools()];
+
     while (true) {
       const response = await this.client.messages.create({
         model: this.model,
         max_tokens: 4096,
-        system: this.buildSystemPrompt(scenario),
-        tools: [...this.getTools(), ...this.getWriteTools()],
+        system: systemPrompt,
+        tools,
         messages,
       });
 
       messages.push({ role: "assistant", content: response.content });
 
       if (response.stop_reason === "end_turn") {
-        const finalText = response.content
+        return response.content
           .filter((b): b is Anthropic.TextBlock => b.type === "text")
           .map(b => b.text)
           .join("\n");
-        return this.parseResult(scenario, finalText, start);
       }
 
-      if (response.stop_reason === "tool_use") {
-        const toolUseBlocks = response.content.filter(
-          (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
-        );
-
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const toolUse of toolUseBlocks) {
-          let output: unknown;
-          if (toolUse.name === "write_file") {
-            output = await this.handleWriteTool(toolUse.name, toolUse.input as Record<string, unknown>);
-          } else {
-            output = await this.handleToolCall(
-              toolUse.name,
-              toolUse.input as Record<string, unknown>
-            );
-          }
-          this.toolCalls.push({
-            tool: toolUse.name,
-            input: toolUse.input as Record<string, unknown>,
-            output,
-            timestamp: Date.now(),
-          });
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(output),
-          });
-        }
-        messages.push({ role: "user", content: toolResults });
+      if (response.stop_reason !== "tool_use") {
+        // Unexpected stop reason — return whatever text we have
+        return response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map(b => b.text)
+          .join("\n");
       }
+
+      const toolUseBlocks = response.content.filter(
+        (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+      );
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      for (const toolUse of toolUseBlocks) {
+        const input = toolUse.input as Record<string, unknown>;
+        const output = toolUse.name === "write_file"
+          ? await this.handleWriteTool(toolUse.name, input)
+          : await this.handleToolCall(toolUse.name, input);
+        this.toolCalls.push({
+          tool: toolUse.name,
+          input,
+          output,
+          timestamp: Date.now(),
+        });
+        const serialized = JSON.stringify(output);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: serialized.length > maxBytes ? serialized.substring(0, maxBytes) : serialized,
+        });
+      }
+      messages.push({ role: "user", content: toolResults });
     }
+  }
+
+  async runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult> {
+    this.toolCalls = [];
+    const start = Date.now();
+    const userPrompt = this.buildUserPrompt(scenario, environment);
+    const finalText = await this.runConversation(this.buildSystemPrompt(scenario), userPrompt);
+    return this.parseResult(scenario, finalText, start);
   }
 
   private buildUserPrompt(scenario: Scenario, environment: Record<string, string>): string {
