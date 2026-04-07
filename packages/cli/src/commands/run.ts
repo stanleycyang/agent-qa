@@ -127,6 +127,7 @@ async function runOnce(
   const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
   const perfThreshold = config.execution?.perf_regression_threshold ?? 2.0;
   const flakyThreshold = config.execution?.flaky_threshold ?? 0.3;
+  const recordVideoOnFailure = config.execution?.record_video_on_failure ?? false;
   const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
   const historyStore = new HistoryStore(path.join(rootDir, ".agentqa", "history.json"));
   const reporter = new ReporterAgent();
@@ -151,6 +152,7 @@ async function runOnce(
       historyStore,
       perfThreshold,
       flakyThreshold,
+      recordVideoOnFailure,
       updateBaselines: options.updateBaselines ?? false,
     },
     log,
@@ -189,6 +191,11 @@ interface RunConfig {
   perfThreshold: number;
   flakyThreshold: number;
   updateBaselines: boolean;
+  recordVideoOnFailure: boolean;
+}
+
+function sanitize(s: string): string {
+  return s.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
 async function runSpecsConcurrently(
@@ -363,6 +370,13 @@ async function executeScenario(
 
   if (spec.environment.type === "web" || spec.environment.type === "a11y") {
     const AgentClass = spec.environment.type === "a11y" ? A11yAgent : UIAgent;
+    const recordVideo = runConfig.recordVideoOnFailure;
+    const replayDir = recordVideo
+      ? path.join(rootDir, ".agentqa", "replays", `${sanitize(spec.name)}_${sanitize(scenario.name)}_${Date.now()}`)
+      : undefined;
+    if (replayDir) {
+      await fs.mkdir(replayDir, { recursive: true });
+    }
     const agent = new AgentClass({
       model: agentModel,
       baselineStore,
@@ -370,10 +384,12 @@ async function executeScenario(
       updateBaselines,
       viewport: matrixViewport,
       browserType: matrixBrowser,
+      recordVideoDir: replayDir,
     });
     await agent.initialize();
+    let result: ScenarioResult | undefined;
     try {
-      const result = await agent.runScenario(scenario, envVars);
+      result = await agent.runScenario(scenario, envVars);
       if (screenshotOnFailure && result.status !== "pass") {
         try {
           const screenshotDir = path.join(rootDir, ".agentqa", "screenshots");
@@ -389,14 +405,43 @@ async function executeScenario(
           // Screenshot capture is best-effort
         }
       }
+      // Persist replay artifacts on failure
+      if (recordVideo && replayDir && result.status !== "pass") {
+        try {
+          const browser = agent.getBrowser();
+          await fs.writeFile(
+            path.join(replayDir, "network.json"),
+            JSON.stringify(browser.getNetworkLog(), null, 2),
+          );
+          await fs.writeFile(
+            path.join(replayDir, "console.json"),
+            JSON.stringify(browser.getConsoleMessages(), null, 2),
+          );
+          await fs.writeFile(
+            path.join(replayDir, "trace.json"),
+            JSON.stringify(result.trace ?? [], null, 2),
+          );
+          result.network_path = path.join(replayDir, "network.json");
+        } catch {}
+      }
       const healEvents = agent.getHealEvents();
       if (healEvents.length > 0) {
         (result as any).healed_selectors = healEvents;
       }
-      return result;
     } finally {
       await agent.cleanup();
+      // Get video path AFTER cleanup (Playwright finalizes the file then)
+      if (recordVideo && replayDir && result && result.status !== "pass") {
+        try {
+          const fsSync = await import("fs");
+          const files = fsSync.readdirSync(replayDir).filter(f => f.endsWith(".webm"));
+          if (files.length > 0) {
+            result.video_path = path.join(replayDir, files[0]);
+          }
+        } catch {}
+      }
     }
+    return result!;
   } else if (spec.environment.type === "api") {
     const agent = new APIAgent(agentModel);
     return agent.runScenario(scenario, envVars);
