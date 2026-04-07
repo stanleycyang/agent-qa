@@ -1,4 +1,4 @@
-export type EnvironmentType = "web" | "api" | "logic";
+export type EnvironmentType = "web" | "api" | "logic" | "a11y" | "security";
 
 export interface SpecTrigger {
   paths?: string[];

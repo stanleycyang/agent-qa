@@ -5,3 +5,5 @@ export * from "./logic-agent.js";
 export * from "./reporter-agent.js";
 export * from "./spec-generator-agent.js";
 export * from "./fix-agent.js";
+export * from "./a11y-agent.js";
+export * from "./security-agent.js";

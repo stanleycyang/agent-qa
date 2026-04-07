@@ -10,7 +10,7 @@ const SpecTriggerSchema = z.object({
 });
 
 const SpecEnvironmentSchema = z.object({
-  type: z.enum(["web", "api", "logic"]),
+  type: z.enum(["web", "api", "logic", "a11y", "security"]),
   base_url: z.string().optional(),
   setup: z.array(z.object({ seed: z.string() })).optional(),
 });

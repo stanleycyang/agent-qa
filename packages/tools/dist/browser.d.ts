@@ -61,6 +61,13 @@ export declare class BrowserTool {
     evaluateJs(expression: string): Promise<{
         result: unknown;
     }>;
+    /** Inject a script (URL or inline content) into the current page. */
+    injectScript(options: {
+        url?: string;
+        content?: string;
+    }): Promise<{
+        success: boolean;
+    }>;
     getConsoleErrors(): Promise<{
         errors: Array<{
             type: string;

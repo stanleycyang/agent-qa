@@ -6,4 +6,5 @@ export * from "./assertions.js";
 export * from "./baseline.js";
 export * from "./history.js";
 export * from "./spec-writer.js";
+export * from "./axe.js";
 //# sourceMappingURL=index.d.ts.map

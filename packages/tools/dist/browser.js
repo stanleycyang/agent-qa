@@ -129,6 +129,13 @@ export class BrowserTool {
         const result = await this.page.evaluate(expression);
         return { result };
     }
+    /** Inject a script (URL or inline content) into the current page. */
+    async injectScript(options) {
+        if (!this.page)
+            throw new Error("Browser not launched");
+        await this.page.addScriptTag(options);
+        return { success: true };
+    }
     async getConsoleErrors() {
         const errors = this.consoleMessages.filter(m => m.type === "error" || m.type === "warning");
         return { errors };

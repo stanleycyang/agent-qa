@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs, SpecResult, Scenario, AgentQASpec, ScenarioResult } from "@agentqa/core";
-import { UIAgent, APIAgent, LogicAgent, ReporterAgent } from "@agentqa/agents";
+import { UIAgent, APIAgent, LogicAgent, ReporterAgent, A11yAgent, SecurityAgent } from "@agentqa/agents";
 import { BaselineStore, HistoryStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 
@@ -361,8 +361,9 @@ async function executeScenario(
 ): Promise<ScenarioResult> {
   const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
 
-  if (spec.environment.type === "web") {
-    const agent = new UIAgent({
+  if (spec.environment.type === "web" || spec.environment.type === "a11y") {
+    const AgentClass = spec.environment.type === "a11y" ? A11yAgent : UIAgent;
+    const agent = new AgentClass({
       model: agentModel,
       baselineStore,
       specName: spec.name,
@@ -388,7 +389,6 @@ async function executeScenario(
           // Screenshot capture is best-effort
         }
       }
-      // Surface heal events as a CLI hint
       const healEvents = agent.getHealEvents();
       if (healEvents.length > 0) {
         (result as any).healed_selectors = healEvents;
@@ -399,6 +399,9 @@ async function executeScenario(
     }
   } else if (spec.environment.type === "api") {
     const agent = new APIAgent(agentModel);
+    return agent.runScenario(scenario, envVars);
+  } else if (spec.environment.type === "security") {
+    const agent = new SecurityAgent(agentModel);
     return agent.runScenario(scenario, envVars);
   } else {
     const agent = new LogicAgent(agentModel);

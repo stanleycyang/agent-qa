@@ -141,6 +141,13 @@ export class BrowserTool {
     return { result };
   }
 
+  /** Inject a script (URL or inline content) into the current page. */
+  async injectScript(options: { url?: string; content?: string }): Promise<{ success: boolean }> {
+    if (!this.page) throw new Error("Browser not launched");
+    await this.page.addScriptTag(options);
+    return { success: true };
+  }
+
   async getConsoleErrors(): Promise<{ errors: Array<{ type: string; text: string }> }> {
     const errors = this.consoleMessages.filter(m => m.type === "error" || m.type === "warning");
     return { errors };
