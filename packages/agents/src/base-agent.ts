@@ -1,14 +1,56 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ToolCall, ScenarioResult, Scenario } from "@agentqa/core";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 export abstract class BaseAgent {
   protected client: Anthropic;
   protected model: string;
   protected toolCalls: ToolCall[] = [];
+  protected allowWrites: boolean = false;
+  protected writeRoot: string = process.cwd();
 
   constructor(model = "claude-opus-4-5") {
     this.client = new Anthropic();
     this.model = model;
+  }
+
+  /** Enable file writes from within the agent loop. Used by fix-agent and auto-heal. */
+  enableWrites(rootDir: string = process.cwd()): void {
+    this.allowWrites = true;
+    this.writeRoot = rootDir;
+  }
+
+  /** Built-in write_file tool exposed when allowWrites is true. */
+  protected getWriteTools(): Anthropic.Tool[] {
+    if (!this.allowWrites) return [];
+    return [
+      {
+        name: "write_file",
+        description: "Write content to a file at the given path. Creates parent directories if needed. Use this to apply fixes or update spec files.",
+        input_schema: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "File path relative to the project root" },
+            content: { type: "string", description: "Full file content to write" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    ];
+  }
+
+  protected async handleWriteTool(name: string, input: Record<string, unknown>): Promise<unknown> {
+    if (name !== "write_file" || !this.allowWrites) return null;
+    const relPath = input.path as string;
+    // Resolve and verify the path stays within writeRoot to prevent escapes
+    const fullPath = path.resolve(this.writeRoot, relPath);
+    if (!fullPath.startsWith(path.resolve(this.writeRoot))) {
+      return { error: "Path escapes write root", success: false };
+    }
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.writeFile(fullPath, input.content as string);
+    return { success: true, path: fullPath };
   }
 
   abstract getTools(): Anthropic.Tool[];
@@ -28,7 +70,7 @@ export abstract class BaseAgent {
         model: this.model,
         max_tokens: 4096,
         system: this.buildSystemPrompt(scenario),
-        tools: this.getTools(),
+        tools: [...this.getTools(), ...this.getWriteTools()],
         messages,
       });
 
@@ -49,10 +91,15 @@ export abstract class BaseAgent {
 
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const toolUse of toolUseBlocks) {
-          const output = await this.handleToolCall(
-            toolUse.name,
-            toolUse.input as Record<string, unknown>
-          );
+          let output: unknown;
+          if (toolUse.name === "write_file") {
+            output = await this.handleWriteTool(toolUse.name, toolUse.input as Record<string, unknown>);
+          } else {
+            output = await this.handleToolCall(
+              toolUse.name,
+              toolUse.input as Record<string, unknown>
+            );
+          }
           this.toolCalls.push({
             tool: toolUse.name,
             input: toolUse.input as Record<string, unknown>,

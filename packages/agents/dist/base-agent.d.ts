@@ -4,7 +4,14 @@ export declare abstract class BaseAgent {
     protected client: Anthropic;
     protected model: string;
     protected toolCalls: ToolCall[];
+    protected allowWrites: boolean;
+    protected writeRoot: string;
     constructor(model?: string);
+    /** Enable file writes from within the agent loop. Used by fix-agent and auto-heal. */
+    enableWrites(rootDir?: string): void;
+    /** Built-in write_file tool exposed when allowWrites is true. */
+    protected getWriteTools(): Anthropic.Tool[];
+    protected handleWriteTool(name: string, input: Record<string, unknown>): Promise<unknown>;
     abstract getTools(): Anthropic.Tool[];
     abstract handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
     abstract buildSystemPrompt(scenario: Scenario): string;

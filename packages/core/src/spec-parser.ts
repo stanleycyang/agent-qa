@@ -31,6 +31,12 @@ const AgentQASpecSchema = z.object({
   scenarios: z.array(ScenarioSchema),
 });
 
+const ViewportSchema = z.object({
+  name: z.string(),
+  width: z.number(),
+  height: z.number(),
+});
+
 const AgentQAConfigSchema = z.object({
   version: z.number(),
   model: z.object({
@@ -43,6 +49,11 @@ const AgentQAConfigSchema = z.object({
     timeout_per_scenario: z.number().optional(),
     retries: z.number().optional(),
     screenshot_on_failure: z.boolean().optional(),
+    viewports: z.array(ViewportSchema).optional(),
+    browsers: z.array(z.enum(["chromium", "firefox", "webkit"])).optional(),
+    flaky_threshold: z.number().optional(),
+    perf_regression_threshold: z.number().optional(),
+    record_video_on_failure: z.boolean().optional(),
   }).optional(),
   environment: z.object({
     preview_url: z.string().optional(),
@@ -54,6 +65,16 @@ const AgentQAConfigSchema = z.object({
     github_status: z.boolean().optional(),
     verbose: z.boolean().optional(),
     artifact_screenshots: z.boolean().optional(),
+  }).optional(),
+  integrations: z.object({
+    figma_token: z.string().optional(),
+    sentry_token: z.string().optional(),
+    sentry_org: z.string().optional(),
+    sentry_project: z.string().optional(),
+    linear_token: z.string().optional(),
+    jira_token: z.string().optional(),
+    jira_host: z.string().optional(),
+    jira_email: z.string().optional(),
   }).optional(),
 });
 
