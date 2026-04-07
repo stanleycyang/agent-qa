@@ -166,82 +166,89 @@ async function runSpec(entry, runConfig, log, config) {
     log(`\n${chalk.bold(`🚀 Running ${spec.name}`)} (${spec.scenarios.length} scenarios)...`);
     const specStart = Date.now();
     const scenarioResults = [];
-    // Scenarios within a spec run sequentially (they may depend on each other)
+    // Scenarios within a spec run sequentially (they may depend on each other).
+    // Each scenario expands across the configured viewport × browser matrix.
     for (const scenario of spec.scenarios) {
-        const scenarioSpinner = json
-            ? { start: () => scenarioSpinner, succeed: (_m) => { }, fail: (_m) => { } }
-            : ora(`  ${scenario.name}`).start();
-        if (!json)
-            scenarioSpinner.start();
-        const scenarioStart = Date.now();
-        try {
-            const envVars = {
-                base_url: resolveEnv(spec.environment.base_url) ?? "",
-                api_url: resolveEnv(config.environment?.api_url) ?? "",
-            };
-            const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, runConfig), maxRetries, scenario.name, timeoutMs, log);
-            // Annotate with flaky and perf regression info from history
-            const flakiness = await historyStore.getFlakiness(spec.name, scenario.name, 10);
-            if (flakiness.runs >= 5 && flakiness.rate >= flakyThreshold && flakiness.rate < 0.9) {
-                result.flaky = flakiness;
-            }
-            const median = await historyStore.getMedianDuration(spec.name, scenario.name);
-            if (median !== null && result.duration_ms > median * perfThreshold) {
-                result.perf_regression = {
-                    baseline_ms: median,
-                    current_ms: result.duration_ms,
-                    ratio: result.duration_ms / median,
+        const matrix = expandMatrix(spec, scenario, config);
+        for (const matrixEntry of matrix) {
+            const matrixLabel = matrixEntry.viewport || matrixEntry.browser
+                ? chalk.gray(` [${[matrixEntry.viewport?.name, matrixEntry.browser].filter(Boolean).join("/")}]`)
+                : "";
+            const scenarioSpinner = json
+                ? { start: () => scenarioSpinner, succeed: (_m) => { }, fail: (_m) => { } }
+                : ora(`  ${scenario.name}${matrixLabel}`).start();
+            if (!json)
+                scenarioSpinner.start();
+            const scenarioStart = Date.now();
+            try {
+                const envVars = {
+                    base_url: resolveEnv(spec.environment.base_url) ?? "",
+                    api_url: resolveEnv(config.environment?.api_url) ?? "",
                 };
-            }
-            // Append to history (after annotation so we don't compare against ourselves)
-            await historyStore.append({
-                spec: spec.name,
-                scenario: scenario.name,
-                status: result.status,
-                duration_ms: result.duration_ms,
-                timestamp: Date.now(),
-            });
-            const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
-            if (result.status === "pass") {
-                const flakyTag = result.flaky ? chalk.yellow(" 🟡 flaky") : "";
-                const perfTag = result.perf_regression
-                    ? chalk.yellow(` ⚠ ${result.perf_regression.ratio.toFixed(1)}× slower than baseline`)
-                    : "";
-                scenarioSpinner.succeed(chalk.green(`  ✅ ${scenario.name}`) + chalk.gray(` (${duration}s)`) + flakyTag + perfTag);
-            }
-            else {
-                scenarioSpinner.fail(chalk.red(`  ❌ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
-                for (const exp of result.expectations) {
-                    if (exp.status === "fail") {
-                        log(chalk.gray(`     → Expected: "${exp.text}"`));
-                        if (exp.evidence) {
-                            log(chalk.gray(`     → Got: ${exp.evidence}`));
+                const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, runConfig, matrixEntry.viewport, matrixEntry.browser), maxRetries, scenario.name, timeoutMs, log);
+                // Annotate with flaky and perf regression info from history
+                const flakiness = await historyStore.getFlakiness(spec.name, scenario.name, 10);
+                if (flakiness.runs >= 5 && flakiness.rate >= flakyThreshold && flakiness.rate < 0.9) {
+                    result.flaky = flakiness;
+                }
+                const median = await historyStore.getMedianDuration(spec.name, scenario.name);
+                if (median !== null && result.duration_ms > median * perfThreshold) {
+                    result.perf_regression = {
+                        baseline_ms: median,
+                        current_ms: result.duration_ms,
+                        ratio: result.duration_ms / median,
+                    };
+                }
+                // Append to history (after annotation so we don't compare against ourselves)
+                await historyStore.append({
+                    spec: spec.name,
+                    scenario: scenario.name,
+                    status: result.status,
+                    duration_ms: result.duration_ms,
+                    timestamp: Date.now(),
+                });
+                const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
+                if (result.status === "pass") {
+                    const flakyTag = result.flaky ? chalk.yellow(" 🟡 flaky") : "";
+                    const perfTag = result.perf_regression
+                        ? chalk.yellow(` ⚠ ${result.perf_regression.ratio.toFixed(1)}× slower than baseline`)
+                        : "";
+                    scenarioSpinner.succeed(chalk.green(`  ✅ ${scenario.name}`) + chalk.gray(` (${duration}s)`) + flakyTag + perfTag);
+                }
+                else {
+                    scenarioSpinner.fail(chalk.red(`  ❌ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
+                    for (const exp of result.expectations) {
+                        if (exp.status === "fail") {
+                            log(chalk.gray(`     → Expected: "${exp.text}"`));
+                            if (exp.evidence) {
+                                log(chalk.gray(`     → Got: ${exp.evidence}`));
+                            }
                         }
                     }
+                    if (result.screenshots?.length) {
+                        log(chalk.gray(`     → Screenshot: ${result.screenshots[0]}`));
+                    }
                 }
-                if (result.screenshots?.length) {
-                    log(chalk.gray(`     → Screenshot: ${result.screenshots[0]}`));
+                if (verbose && result.trace?.length) {
+                    log(chalk.gray(`     Tool calls:`));
+                    for (const tc of result.trace) {
+                        log(chalk.gray(`       • ${tc.tool}(${JSON.stringify(tc.input).substring(0, 80)})`));
+                    }
                 }
+                scenarioResults.push(result);
             }
-            if (verbose && result.trace?.length) {
-                log(chalk.gray(`     Tool calls:`));
-                for (const tc of result.trace) {
-                    log(chalk.gray(`       • ${tc.tool}(${JSON.stringify(tc.input).substring(0, 80)})`));
-                }
+            catch (err) {
+                const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
+                scenarioSpinner.fail(chalk.red(`  ❌ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
+                log(chalk.gray(`     → Error: ${err.message}`));
+                scenarioResults.push({
+                    scenario: scenario.name,
+                    status: "error",
+                    expectations: scenario.expect.map(e => ({ text: e, status: "skip" })),
+                    duration_ms: Date.now() - scenarioStart,
+                    error: err.message,
+                });
             }
-            scenarioResults.push(result);
-        }
-        catch (err) {
-            const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
-            scenarioSpinner.fail(chalk.red(`  ❌ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
-            log(chalk.gray(`     → Error: ${err.message}`));
-            scenarioResults.push({
-                scenario: scenario.name,
-                status: "error",
-                expectations: scenario.expect.map(e => ({ text: e, status: "skip" })),
-                duration_ms: Date.now() - scenarioStart,
-                error: err.message,
-            });
         }
     }
     const specStatus = scenarioResults.every(s => s.status === "pass") ? "pass" : "fail";
@@ -252,7 +259,7 @@ async function runSpec(entry, runConfig, log, config) {
         duration_ms: Date.now() - specStart,
     };
 }
-async function executeScenario(spec, scenario, envVars, runConfig) {
+async function executeScenario(spec, scenario, envVars, runConfig, matrixViewport, matrixBrowser) {
     const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
     if (spec.environment.type === "web") {
         const agent = new UIAgent({
@@ -260,6 +267,8 @@ async function executeScenario(spec, scenario, envVars, runConfig) {
             baselineStore,
             specName: spec.name,
             updateBaselines,
+            viewport: matrixViewport,
+            browserType: matrixBrowser,
         });
         await agent.initialize();
         try {
@@ -268,7 +277,10 @@ async function executeScenario(spec, scenario, envVars, runConfig) {
                 try {
                     const screenshotDir = path.join(rootDir, ".agentqa", "screenshots");
                     await fs.mkdir(screenshotDir, { recursive: true });
-                    const filename = `${spec.name}_${scenario.name}_${Date.now()}.png`.replace(/\s+/g, "-");
+                    const matrixSuffix = matrixViewport || matrixBrowser
+                        ? `_${matrixViewport?.name ?? ""}${matrixBrowser ? "-" + matrixBrowser : ""}`
+                        : "";
+                    const filename = `${spec.name}_${scenario.name}${matrixSuffix}_${Date.now()}.png`.replace(/\s+/g, "-");
                     const screenshotPath = path.join(screenshotDir, filename);
                     await agent.captureScreenshot(screenshotPath);
                     result.screenshots = [screenshotPath];
@@ -276,6 +288,11 @@ async function executeScenario(spec, scenario, envVars, runConfig) {
                 catch {
                     // Screenshot capture is best-effort
                 }
+            }
+            // Surface heal events as a CLI hint
+            const healEvents = agent.getHealEvents();
+            if (healEvents.length > 0) {
+                result.healed_selectors = healEvents;
             }
             return result;
         }
@@ -291,6 +308,26 @@ async function executeScenario(spec, scenario, envVars, runConfig) {
         const agent = new LogicAgent(agentModel);
         return agent.runScenario(scenario, envVars);
     }
+}
+/** Expand a single scenario into the configured viewport × browser matrix. */
+function expandMatrix(spec, scenario, config) {
+    if (spec.environment.type !== "web") {
+        return [{}];
+    }
+    const viewports = config.execution?.viewports;
+    const browsers = config.execution?.browsers;
+    if (!viewports?.length && !browsers?.length) {
+        return [{}];
+    }
+    const vps = viewports?.length ? viewports : [undefined];
+    const brs = browsers?.length ? browsers : [undefined];
+    const matrix = [];
+    for (const vp of vps) {
+        for (const br of brs) {
+            matrix.push({ viewport: vp, browser: br });
+        }
+    }
+    return matrix;
 }
 function withTimeout(promise, ms, label) {
     return new Promise((resolve, reject) => {

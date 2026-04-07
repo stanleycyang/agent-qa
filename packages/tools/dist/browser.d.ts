@@ -1,8 +1,27 @@
+export type BrowserType = "chromium" | "firefox" | "webkit";
+export interface BrowserLaunchOptions {
+    headless?: boolean;
+    browserType?: BrowserType;
+    viewport?: {
+        width: number;
+        height: number;
+    };
+    recordVideoDir?: string;
+}
 export declare class BrowserTool {
     private browser;
+    private context;
     private page;
     private consoleMessages;
-    launch(headless?: boolean): Promise<void>;
+    private networkLog;
+    private currentVideoDir?;
+    launch(options?: BrowserLaunchOptions | boolean): Promise<void>;
+    /** Get the captured network log for the current session. */
+    getNetworkLog(): typeof this.networkLog;
+    /** Get all captured console messages. */
+    getConsoleMessages(): typeof this.consoleMessages;
+    /** Get the path to the recorded video, if recording was enabled. */
+    getVideoPath(): Promise<string | null>;
     navigate(url: string): Promise<{
         success: boolean;
         url: string;

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { Scenario } from "@agentqa/core";
+import { Scenario, ViewportConfig, BrowserType } from "@agentqa/core";
 import { BrowserTool, AssertionEngine, BaselineStore } from "@agentqa/tools";
 import { BaseAgent } from "./base-agent.js";
 
@@ -8,6 +8,9 @@ export interface UIAgentOptions {
   baselineStore?: BaselineStore;
   specName?: string;
   updateBaselines?: boolean;
+  viewport?: ViewportConfig;
+  browserType?: BrowserType;
+  recordVideoDir?: string;
 }
 
 export class UIAgent extends BaseAgent {
@@ -17,6 +20,9 @@ export class UIAgent extends BaseAgent {
   private specName?: string;
   private updateBaselines: boolean;
   private currentScenarioName: string = "";
+  private viewport?: ViewportConfig;
+  private browserType: BrowserType;
+  private recordVideoDir?: string;
 
   constructor(modelOrOptions?: string | UIAgentOptions) {
     const options: UIAgentOptions = typeof modelOrOptions === "string"
@@ -28,15 +34,38 @@ export class UIAgent extends BaseAgent {
     this.baselineStore = options.baselineStore;
     this.specName = options.specName;
     this.updateBaselines = options.updateBaselines ?? false;
+    this.viewport = options.viewport;
+    this.browserType = options.browserType ?? "chromium";
+    this.recordVideoDir = options.recordVideoDir;
+  }
+
+  getViewportName(): string | undefined {
+    return this.viewport?.name;
+  }
+
+  getBrowserType(): BrowserType {
+    return this.browserType;
+  }
+
+  getBrowser(): BrowserTool {
+    return this.browser;
   }
 
   async runScenario(scenario: Scenario, environment: Record<string, string>) {
     this.currentScenarioName = scenario.name;
-    return super.runScenario(scenario, environment);
+    const result = await super.runScenario(scenario, environment);
+    if (this.viewport) result.viewport = this.viewport.name;
+    if (this.browserType !== "chromium") result.browser = this.browserType;
+    return result;
   }
 
   async initialize(): Promise<void> {
-    await this.browser.launch();
+    await this.browser.launch({
+      headless: true,
+      browserType: this.browserType,
+      viewport: this.viewport ? { width: this.viewport.width, height: this.viewport.height } : undefined,
+      recordVideoDir: this.recordVideoDir,
+    });
   }
 
   async cleanup(): Promise<void> {

@@ -1,17 +1,61 @@
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 export class BrowserTool {
     browser = null;
+    context = null;
     page = null;
     consoleMessages = [];
-    async launch(headless = true) {
-        this.browser = await chromium.launch({ headless });
-        this.page = await this.browser.newPage();
+    networkLog = [];
+    currentVideoDir;
+    async launch(options = true) {
+        // Backward compat: launch(true/false) = headless toggle on chromium
+        const opts = typeof options === "boolean"
+            ? { headless: options }
+            : options;
+        const { headless = true, browserType = "chromium", viewport, recordVideoDir } = opts;
+        this.currentVideoDir = recordVideoDir;
+        const launcher = browserType === "firefox" ? firefox : browserType === "webkit" ? webkit : chromium;
+        this.browser = await launcher.launch({ headless });
+        this.context = await this.browser.newContext({
+            viewport: viewport ?? null,
+            recordVideo: recordVideoDir ? { dir: recordVideoDir } : undefined,
+        });
+        this.page = await this.context.newPage();
         this.page.on("console", (msg) => {
             this.consoleMessages.push({ type: msg.type(), text: msg.text() });
         });
         this.page.on("pageerror", (err) => {
             this.consoleMessages.push({ type: "error", text: err.message });
         });
+        this.page.on("request", (req) => {
+            this.networkLog.push({ method: req.method(), url: req.url(), timestamp: Date.now() });
+        });
+        this.page.on("response", (resp) => {
+            const entry = this.networkLog.find(e => e.url === resp.url() && e.status === undefined);
+            if (entry)
+                entry.status = resp.status();
+        });
+    }
+    /** Get the captured network log for the current session. */
+    getNetworkLog() {
+        return this.networkLog;
+    }
+    /** Get all captured console messages. */
+    getConsoleMessages() {
+        return this.consoleMessages;
+    }
+    /** Get the path to the recorded video, if recording was enabled. */
+    async getVideoPath() {
+        if (!this.currentVideoDir || !this.page)
+            return null;
+        const video = this.page.video();
+        if (!video)
+            return null;
+        try {
+            return await video.path();
+        }
+        catch {
+            return null;
+        }
     }
     async navigate(url) {
         if (!this.page)
@@ -137,11 +181,16 @@ export class BrowserTool {
         return { selector: candidates[0] ?? null, matches: candidates };
     }
     async close() {
+        if (this.context) {
+            await this.context.close();
+            this.context = null;
+        }
         if (this.browser) {
             await this.browser.close();
             this.browser = null;
             this.page = null;
             this.consoleMessages = [];
+            this.networkLog = [];
         }
     }
 }

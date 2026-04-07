@@ -238,27 +238,33 @@ async function runSpec(
   const specStart = Date.now();
   const scenarioResults: ScenarioResult[] = [];
 
-  // Scenarios within a spec run sequentially (they may depend on each other)
+  // Scenarios within a spec run sequentially (they may depend on each other).
+  // Each scenario expands across the configured viewport × browser matrix.
   for (const scenario of spec.scenarios) {
-    const scenarioSpinner = json
-      ? { start: () => scenarioSpinner, succeed: (_m?: string) => {}, fail: (_m?: string) => {} }
-      : ora(`  ${scenario.name}`).start();
-    if (!json) (scenarioSpinner as ReturnType<typeof ora>).start();
-    const scenarioStart = Date.now();
+    const matrix = expandMatrix(spec, scenario, config);
+    for (const matrixEntry of matrix) {
+      const matrixLabel = matrixEntry.viewport || matrixEntry.browser
+        ? chalk.gray(` [${[matrixEntry.viewport?.name, matrixEntry.browser].filter(Boolean).join("/")}]`)
+        : "";
+      const scenarioSpinner = json
+        ? { start: () => scenarioSpinner, succeed: (_m?: string) => {}, fail: (_m?: string) => {} }
+        : ora(`  ${scenario.name}${matrixLabel}`).start();
+      if (!json) (scenarioSpinner as ReturnType<typeof ora>).start();
+      const scenarioStart = Date.now();
 
-    try {
-      const envVars: Record<string, string> = {
-        base_url: resolveEnv(spec.environment.base_url) ?? "",
-        api_url: resolveEnv(config.environment?.api_url) ?? "",
-      };
+      try {
+        const envVars: Record<string, string> = {
+          base_url: resolveEnv(spec.environment.base_url) ?? "",
+          api_url: resolveEnv(config.environment?.api_url) ?? "",
+        };
 
-      const result = await runWithRetries(
-        () => executeScenario(spec, scenario, envVars, runConfig),
-        maxRetries,
-        scenario.name,
-        timeoutMs,
-        log,
-      );
+        const result = await runWithRetries(
+          () => executeScenario(spec, scenario, envVars, runConfig, matrixEntry.viewport, matrixEntry.browser),
+          maxRetries,
+          scenario.name,
+          timeoutMs,
+          log,
+        );
 
       // Annotate with flaky and perf regression info from history
       const flakiness = await historyStore.getFlakiness(spec.name, scenario.name, 10);
@@ -332,6 +338,7 @@ async function runSpec(
         duration_ms: Date.now() - scenarioStart,
         error: err.message,
       });
+      }
     }
   }
 
@@ -349,6 +356,8 @@ async function executeScenario(
   scenario: Scenario,
   envVars: Record<string, string>,
   runConfig: RunConfig,
+  matrixViewport?: import("@agentqa/core").ViewportConfig,
+  matrixBrowser?: import("@agentqa/core").BrowserType,
 ): Promise<ScenarioResult> {
   const { agentModel, screenshotOnFailure, rootDir, baselineStore, updateBaselines } = runConfig;
 
@@ -358,6 +367,8 @@ async function executeScenario(
       baselineStore,
       specName: spec.name,
       updateBaselines,
+      viewport: matrixViewport,
+      browserType: matrixBrowser,
     });
     await agent.initialize();
     try {
@@ -366,13 +377,21 @@ async function executeScenario(
         try {
           const screenshotDir = path.join(rootDir, ".agentqa", "screenshots");
           await fs.mkdir(screenshotDir, { recursive: true });
-          const filename = `${spec.name}_${scenario.name}_${Date.now()}.png`.replace(/\s+/g, "-");
+          const matrixSuffix = matrixViewport || matrixBrowser
+            ? `_${matrixViewport?.name ?? ""}${matrixBrowser ? "-" + matrixBrowser : ""}`
+            : "";
+          const filename = `${spec.name}_${scenario.name}${matrixSuffix}_${Date.now()}.png`.replace(/\s+/g, "-");
           const screenshotPath = path.join(screenshotDir, filename);
           await agent.captureScreenshot(screenshotPath);
           result.screenshots = [screenshotPath];
         } catch {
           // Screenshot capture is best-effort
         }
+      }
+      // Surface heal events as a CLI hint
+      const healEvents = agent.getHealEvents();
+      if (healEvents.length > 0) {
+        (result as any).healed_selectors = healEvents;
       }
       return result;
     } finally {
@@ -385,6 +404,33 @@ async function executeScenario(
     const agent = new LogicAgent(agentModel);
     return agent.runScenario(scenario, envVars);
   }
+}
+
+/** Expand a single scenario into the configured viewport × browser matrix. */
+function expandMatrix(
+  spec: AgentQASpec,
+  scenario: Scenario,
+  config: Awaited<ReturnType<typeof loadConfig>>,
+): Array<{ viewport?: import("@agentqa/core").ViewportConfig; browser?: import("@agentqa/core").BrowserType }> {
+  if (spec.environment.type !== "web") {
+    return [{}];
+  }
+  const viewports = config.execution?.viewports;
+  const browsers = config.execution?.browsers;
+
+  if (!viewports?.length && !browsers?.length) {
+    return [{}];
+  }
+
+  const vps = viewports?.length ? viewports : [undefined];
+  const brs = browsers?.length ? browsers : [undefined];
+  const matrix: Array<{ viewport?: import("@agentqa/core").ViewportConfig; browser?: import("@agentqa/core").BrowserType }> = [];
+  for (const vp of vps) {
+    for (const br of brs) {
+      matrix.push({ viewport: vp as any, browser: br as any });
+    }
+  }
+  return matrix;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

@@ -7,6 +7,9 @@ export class UIAgent extends BaseAgent {
     specName;
     updateBaselines;
     currentScenarioName = "";
+    viewport;
+    browserType;
+    recordVideoDir;
     constructor(modelOrOptions) {
         const options = typeof modelOrOptions === "string"
             ? { model: modelOrOptions }
@@ -17,13 +20,35 @@ export class UIAgent extends BaseAgent {
         this.baselineStore = options.baselineStore;
         this.specName = options.specName;
         this.updateBaselines = options.updateBaselines ?? false;
+        this.viewport = options.viewport;
+        this.browserType = options.browserType ?? "chromium";
+        this.recordVideoDir = options.recordVideoDir;
+    }
+    getViewportName() {
+        return this.viewport?.name;
+    }
+    getBrowserType() {
+        return this.browserType;
+    }
+    getBrowser() {
+        return this.browser;
     }
     async runScenario(scenario, environment) {
         this.currentScenarioName = scenario.name;
-        return super.runScenario(scenario, environment);
+        const result = await super.runScenario(scenario, environment);
+        if (this.viewport)
+            result.viewport = this.viewport.name;
+        if (this.browserType !== "chromium")
+            result.browser = this.browserType;
+        return result;
     }
     async initialize() {
-        await this.browser.launch();
+        await this.browser.launch({
+            headless: true,
+            browserType: this.browserType,
+            viewport: this.viewport ? { width: this.viewport.width, height: this.viewport.height } : undefined,
+            recordVideoDir: this.recordVideoDir,
+        });
     }
     async cleanup() {
         await this.browser.close();
