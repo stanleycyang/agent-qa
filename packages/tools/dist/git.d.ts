@@ -13,5 +13,19 @@ export declare class GitTool {
     getCurrentBranch(): Promise<{
         branch: string;
     }>;
+    getCurrentSha(): Promise<string>;
+    show(ref: string): Promise<{
+        author: string;
+        date: string;
+        message: string;
+        sha: string;
+    }>;
+    bisectStart(badRef: string, goodRef: string): Promise<void>;
+    bisectMark(result: "good" | "bad"): Promise<{
+        done: boolean;
+        sha?: string;
+        message: string;
+    }>;
+    bisectReset(): Promise<void>;
 }
 //# sourceMappingURL=git.d.ts.map

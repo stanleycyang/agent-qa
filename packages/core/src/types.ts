@@ -1,4 +1,4 @@
-export type EnvironmentType = "web" | "api" | "logic";
+export type EnvironmentType = "web" | "api" | "logic" | "a11y" | "security";
 
 export interface SpecTrigger {
   paths?: string[];
@@ -46,6 +46,13 @@ export interface ScenarioResult {
   screenshots?: string[];
   error?: string;
   trace?: ToolCall[];
+  viewport?: string;
+  browser?: string;
+  video_path?: string;
+  network_path?: string;
+  flaky?: { rate: number; runs: number };
+  perf_regression?: { baseline_ms: number; current_ms: number; ratio: number };
+  healed_selectors?: Array<{ original: string; healed: string; reasoning: string }>;
 }
 
 export interface SpecResult {
@@ -74,6 +81,14 @@ export interface ToolCall {
   timestamp: number;
 }
 
+export interface ViewportConfig {
+  name: string;
+  width: number;
+  height: number;
+}
+
+export type BrowserType = "chromium" | "firefox" | "webkit";
+
 export interface AgentQAConfig {
   version: number;
   model?: {
@@ -86,6 +101,11 @@ export interface AgentQAConfig {
     timeout_per_scenario?: number;
     retries?: number;
     screenshot_on_failure?: boolean;
+    viewports?: ViewportConfig[];
+    browsers?: BrowserType[];
+    flaky_threshold?: number;
+    perf_regression_threshold?: number;
+    record_video_on_failure?: boolean;
   };
   environment?: {
     preview_url?: string;
@@ -97,5 +117,15 @@ export interface AgentQAConfig {
     github_status?: boolean;
     verbose?: boolean;
     artifact_screenshots?: boolean;
+  };
+  integrations?: {
+    figma_token?: string;
+    sentry_token?: string;
+    sentry_org?: string;
+    sentry_project?: string;
+    linear_token?: string;
+    jira_token?: string;
+    jira_host?: string;
+    jira_email?: string;
   };
 }

@@ -10,7 +10,7 @@ const SpecTriggerSchema = z.object({
 });
 
 const SpecEnvironmentSchema = z.object({
-  type: z.enum(["web", "api", "logic"]),
+  type: z.enum(["web", "api", "logic", "a11y", "security"]),
   base_url: z.string().optional(),
   setup: z.array(z.object({ seed: z.string() })).optional(),
 });
@@ -31,6 +31,12 @@ const AgentQASpecSchema = z.object({
   scenarios: z.array(ScenarioSchema),
 });
 
+const ViewportSchema = z.object({
+  name: z.string(),
+  width: z.number(),
+  height: z.number(),
+});
+
 const AgentQAConfigSchema = z.object({
   version: z.number(),
   model: z.object({
@@ -43,6 +49,11 @@ const AgentQAConfigSchema = z.object({
     timeout_per_scenario: z.number().optional(),
     retries: z.number().optional(),
     screenshot_on_failure: z.boolean().optional(),
+    viewports: z.array(ViewportSchema).optional(),
+    browsers: z.array(z.enum(["chromium", "firefox", "webkit"])).optional(),
+    flaky_threshold: z.number().optional(),
+    perf_regression_threshold: z.number().optional(),
+    record_video_on_failure: z.boolean().optional(),
   }).optional(),
   environment: z.object({
     preview_url: z.string().optional(),
@@ -54,6 +65,16 @@ const AgentQAConfigSchema = z.object({
     github_status: z.boolean().optional(),
     verbose: z.boolean().optional(),
     artifact_screenshots: z.boolean().optional(),
+  }).optional(),
+  integrations: z.object({
+    figma_token: z.string().optional(),
+    sentry_token: z.string().optional(),
+    sentry_org: z.string().optional(),
+    sentry_project: z.string().optional(),
+    linear_token: z.string().optional(),
+    jira_token: z.string().optional(),
+    jira_host: z.string().optional(),
+    jira_email: z.string().optional(),
   }).optional(),
 });
 
@@ -72,14 +93,30 @@ export async function parseConfig(configPath: string): Promise<AgentQAConfig> {
 export async function loadAllSpecs(specsDir: string): Promise<Array<{ spec: AgentQASpec; path: string }>> {
   const files = await fs.readdir(specsDir);
   const yamlFiles = files.filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
-  
-  const specs = await Promise.all(
-    yamlFiles.map(async (file) => {
-      const specPath = path.join(specsDir, file);
+
+  if (yamlFiles.length === 0) {
+    return [];
+  }
+
+  const specs: Array<{ spec: AgentQASpec; path: string }> = [];
+  const errors: Array<{ file: string; error: string }> = [];
+
+  for (const file of yamlFiles) {
+    const specPath = path.join(specsDir, file);
+    try {
       const spec = await parseSpec(specPath);
-      return { spec, path: specPath };
-    })
-  );
-  
+      specs.push({ spec, path: specPath });
+    } catch (err: any) {
+      errors.push({ file, error: err.message });
+      console.warn(`Warning: skipping invalid spec ${file}: ${err.message}`);
+    }
+  }
+
+  if (specs.length === 0 && errors.length > 0) {
+    throw new Error(
+      `All spec files failed to parse:\n${errors.map(e => `  - ${e.file}: ${e.error}`).join("\n")}`
+    );
+  }
+
   return specs;
 }

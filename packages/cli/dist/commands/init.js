@@ -49,9 +49,20 @@ scenarios:
     expect:
       - "Order confirmation page is displayed"
       - "An order number is visible"
+      - "No visual regressions on the confirmation page (use check_visual_regression with baseline_name 'confirmation')"
+      - "No broken layout or overflow issues (use detect_visual_issues)"
     on_failure: screenshot
 `;
-export async function initCommand(rootDir = process.cwd()) {
+async function fileExists(filePath) {
+    try {
+        await fs.access(filePath);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+export async function initCommand(rootDir = process.cwd(), force) {
     const agentqaDir = path.join(rootDir, ".agentqa");
     const specsDir = path.join(agentqaDir, "specs");
     const configPath = path.join(agentqaDir, "config.yaml");
@@ -60,16 +71,27 @@ export async function initCommand(rootDir = process.cwd()) {
     // Create directories
     await fs.mkdir(agentqaDir, { recursive: true });
     await fs.mkdir(specsDir, { recursive: true });
-    // Write config
-    await fs.writeFile(configPath, DEFAULT_CONFIG);
-    console.log(chalk.green("✓") + " Created .agentqa/config.yaml");
-    // Write example spec
-    await fs.writeFile(exampleSpecPath, EXAMPLE_SPEC);
-    console.log(chalk.green("✓") + " Created .agentqa/specs/example.yaml");
+    // Write config (skip if exists unless --force)
+    if (force || !await fileExists(configPath)) {
+        await fs.writeFile(configPath, DEFAULT_CONFIG);
+        console.log(chalk.green("✓") + " Created .agentqa/config.yaml");
+    }
+    else {
+        console.log(chalk.yellow("⚠") + " .agentqa/config.yaml already exists, skipping (use --force to overwrite)");
+    }
+    // Write example spec (skip if exists unless --force)
+    if (force || !await fileExists(exampleSpecPath)) {
+        await fs.writeFile(exampleSpecPath, EXAMPLE_SPEC);
+        console.log(chalk.green("✓") + " Created .agentqa/specs/example.yaml");
+    }
+    else {
+        console.log(chalk.yellow("⚠") + " .agentqa/specs/example.yaml already exists, skipping (use --force to overwrite)");
+    }
     console.log(chalk.green("\n✅ AgentQA initialized!\n"));
     console.log("Next steps:");
     console.log("  1. Edit .agentqa/specs/example.yaml to match your app");
-    console.log("  2. Run: " + chalk.cyan("agentqa run"));
-    console.log("  3. See docs: " + chalk.cyan("https://github.com/yourusername/agentqa\n"));
+    console.log("  2. Set your API key: " + chalk.cyan("export ANTHROPIC_API_KEY=sk-ant-..."));
+    console.log("  3. Run: " + chalk.cyan("agentqa run"));
+    console.log("  4. Validate: " + chalk.cyan("agentqa validate"));
 }
 //# sourceMappingURL=init.js.map

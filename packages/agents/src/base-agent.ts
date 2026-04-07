@@ -1,72 +1,140 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { ToolCall, ScenarioResult, Scenario } from "@agentqa/core";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 export abstract class BaseAgent {
   protected client: Anthropic;
   protected model: string;
   protected toolCalls: ToolCall[] = [];
+  protected allowWrites: boolean = false;
+  protected writeRoot: string = process.cwd();
 
   constructor(model = "claude-opus-4-5") {
     this.client = new Anthropic();
     this.model = model;
   }
 
+  /** Enable file writes from within the agent loop. Used by fix-agent and auto-heal. */
+  enableWrites(rootDir: string = process.cwd()): void {
+    this.allowWrites = true;
+    this.writeRoot = rootDir;
+  }
+
+  /** Built-in write_file tool exposed when allowWrites is true. */
+  protected getWriteTools(): Anthropic.Tool[] {
+    if (!this.allowWrites) return [];
+    return [
+      {
+        name: "write_file",
+        description: "Write content to a file at the given path. Creates parent directories if needed. Use this to apply fixes or update spec files.",
+        input_schema: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "File path relative to the project root" },
+            content: { type: "string", description: "Full file content to write" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    ];
+  }
+
+  protected async handleWriteTool(name: string, input: Record<string, unknown>): Promise<unknown> {
+    if (name !== "write_file" || !this.allowWrites) return null;
+    const relPath = input.path as string;
+    // Use path.relative so a sibling like "/foo/barx" can't masquerade as a
+    // child of "/foo/bar" via String.startsWith.
+    const root = path.resolve(this.writeRoot);
+    const fullPath = path.resolve(root, relPath);
+    const rel = path.relative(root, fullPath);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
+      return { error: "Path escapes write root", success: false };
+    }
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.writeFile(fullPath, input.content as string);
+    return { success: true, path: fullPath };
+  }
+
   abstract getTools(): Anthropic.Tool[];
   abstract handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
   abstract buildSystemPrompt(scenario: Scenario): string;
 
-  async runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult> {
-    const start = Date.now();
-    const messages: Anthropic.MessageParam[] = [];
-    
-    const userPrompt = this.buildUserPrompt(scenario, environment);
-    messages.push({ role: "user", content: userPrompt });
-    
+  /**
+   * Drive a conversation loop with the model: send the prompt, handle any
+   * tool calls (including the built-in write_file when allowed), and return
+   * the final assistant text. Used by both `runScenario` and free-form
+   * tasks like spec generation and fix proposal.
+   */
+  protected async runConversation(
+    systemPrompt: string,
+    initialUserMessage: string,
+    options: { maxToolResultBytes?: number } = {},
+  ): Promise<string> {
+    const maxBytes = options.maxToolResultBytes ?? Infinity;
+    const messages: Anthropic.MessageParam[] = [
+      { role: "user", content: initialUserMessage },
+    ];
+    const tools: Anthropic.Tool[] = [...this.getTools(), ...this.getWriteTools()];
+
     while (true) {
       const response = await this.client.messages.create({
         model: this.model,
         max_tokens: 4096,
-        system: this.buildSystemPrompt(scenario),
-        tools: this.getTools(),
+        system: systemPrompt,
+        tools,
         messages,
       });
 
       messages.push({ role: "assistant", content: response.content });
 
       if (response.stop_reason === "end_turn") {
-        const finalText = response.content
+        return response.content
           .filter((b): b is Anthropic.TextBlock => b.type === "text")
           .map(b => b.text)
           .join("\n");
-        return this.parseResult(scenario, finalText, start);
       }
 
-      if (response.stop_reason === "tool_use") {
-        const toolUseBlocks = response.content.filter(
-          (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
-        );
-
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const toolUse of toolUseBlocks) {
-          const output = await this.handleToolCall(
-            toolUse.name,
-            toolUse.input as Record<string, unknown>
-          );
-          this.toolCalls.push({
-            tool: toolUse.name,
-            input: toolUse.input as Record<string, unknown>,
-            output,
-            timestamp: Date.now(),
-          });
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(output),
-          });
-        }
-        messages.push({ role: "user", content: toolResults });
+      if (response.stop_reason !== "tool_use") {
+        // Unexpected stop reason — return whatever text we have
+        return response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map(b => b.text)
+          .join("\n");
       }
+
+      const toolUseBlocks = response.content.filter(
+        (b): b is Anthropic.ToolUseBlock => b.type === "tool_use"
+      );
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+      for (const toolUse of toolUseBlocks) {
+        const input = toolUse.input as Record<string, unknown>;
+        const output = toolUse.name === "write_file"
+          ? await this.handleWriteTool(toolUse.name, input)
+          : await this.handleToolCall(toolUse.name, input);
+        this.toolCalls.push({
+          tool: toolUse.name,
+          input,
+          output,
+          timestamp: Date.now(),
+        });
+        const serialized = JSON.stringify(output);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: serialized.length > maxBytes ? serialized.substring(0, maxBytes) : serialized,
+        });
+      }
+      messages.push({ role: "user", content: toolResults });
     }
+  }
+
+  async runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult> {
+    this.toolCalls = [];
+    const start = Date.now();
+    const userPrompt = this.buildUserPrompt(scenario, environment);
+    const finalText = await this.runConversation(this.buildSystemPrompt(scenario), userPrompt);
+    return this.parseResult(scenario, finalText, start);
   }
 
   private buildUserPrompt(scenario: Scenario, environment: Record<string, string>): string {
@@ -107,8 +175,12 @@ Return a JSON result with this structure:
           trace: this.toolCalls,
         };
       }
-    } catch {}
-    
+    } catch (e) {
+      console.warn(
+        `Failed to parse agent JSON result: ${(e as Error).message}\nRaw output (truncated): ${finalText.substring(0, 500)}`
+      );
+    }
+
     return {
       scenario: scenario.name,
       status: "error",

@@ -1,0 +1,1 @@
+{"version":3,"file":"spec-generator-agent.d.ts","sourceRoot":"","sources":["../src/spec-generator-agent.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,QAAQ,EAAE,MAAM,eAAe,CAAC;AACzC,OAAO,EAAE,UAAU,EAAE,MAAM,kBAAkB,CAAC;AAE9C;;;;;GAKG;AACH,qBAAa,kBAAmB,SAAQ,UAAU;IAChD,iBAAiB,CAAC,SAAS,EAAE,QAAQ,GAAG,MAAM;IAIxC,mBAAmB,CAAC,OAAO,EAAE,MAAM,GAAG,OAAO,CAAC,MAAM,CAAC;CAI5D"}

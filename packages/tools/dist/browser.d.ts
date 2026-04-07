@@ -1,10 +1,33 @@
+import type { BrowserType } from "@agentqa/core";
+export interface BrowserLaunchOptions {
+    headless?: boolean;
+    browserType?: BrowserType;
+    viewport?: {
+        width: number;
+        height: number;
+    };
+    recordVideoDir?: string;
+}
 export declare class BrowserTool {
     private browser;
+    private context;
     private page;
-    launch(headless?: boolean): Promise<void>;
+    private consoleMessages;
+    private networkLog;
+    /** Maps each Playwright Request to its log entry so the response handler is O(1). */
+    private requestEntries;
+    private currentVideoDir?;
+    launch(options?: BrowserLaunchOptions | boolean): Promise<void>;
+    /** Get the captured network log for the current session. */
+    getNetworkLog(): typeof this.networkLog;
+    /** Get all captured console messages. */
+    getConsoleMessages(): typeof this.consoleMessages;
+    /** Get the path to the recorded video, if recording was enabled. */
+    getVideoPath(): Promise<string | null>;
     navigate(url: string): Promise<{
         success: boolean;
         url: string;
+        title: string;
     }>;
     click(selector: string): Promise<{
         success: boolean;
@@ -12,9 +35,9 @@ export declare class BrowserTool {
     type(selector: string, text: string): Promise<{
         success: boolean;
     }>;
-    screenshot(path?: string): Promise<{
+    screenshot(savePath?: string): Promise<{
         path?: string;
-        buffer?: Buffer;
+        base64: string;
     }>;
     getContent(): Promise<{
         content: string;
@@ -24,6 +47,47 @@ export declare class BrowserTool {
     }>;
     waitForSelector(selector: string, timeout?: number): Promise<{
         success: boolean;
+    }>;
+    hover(selector: string): Promise<{
+        success: boolean;
+    }>;
+    selectOption(selector: string, value: string): Promise<{
+        success: boolean;
+    }>;
+    getAttribute(selector: string, attribute: string): Promise<{
+        value: string | null;
+    }>;
+    getTextContent(selector: string): Promise<{
+        text: string | null;
+    }>;
+    evaluateJs(expression: string): Promise<{
+        result: unknown;
+    }>;
+    /** Inject a script (URL or inline content) into the current page. */
+    injectScript(options: {
+        url?: string;
+        content?: string;
+    }): Promise<{
+        success: boolean;
+    }>;
+    getConsoleErrors(): Promise<{
+        errors: Array<{
+            type: string;
+            text: string;
+        }>;
+    }>;
+    scroll(selector?: string, direction?: "up" | "down"): Promise<{
+        success: boolean;
+    }>;
+    /**
+     * Try to find an element matching a description by searching the DOM for
+     * common attributes (data-testid, aria-label, role, text content).
+     * Returns the first matching CSS selector or null.
+     * The eval function runs in the browser context where DOM globals exist.
+     */
+    findElementByDescription(description: string): Promise<{
+        selector: string | null;
+        matches: string[];
     }>;
     close(): Promise<void>;
 }

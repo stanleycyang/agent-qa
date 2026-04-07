@@ -12,9 +12,12 @@
     "playwright": "^1.42.0",
     "axios": "^1.6.0",
     "simple-git": "^3.22.0",
-    "@anthropic-ai/sdk": "^0.32.0"
+    "js-yaml": "^4.1.0",
+    "@anthropic-ai/sdk": "^0.32.0",
+    "@agentqa/core": "*"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@types/js-yaml": "^4.0.0"
   }
 }

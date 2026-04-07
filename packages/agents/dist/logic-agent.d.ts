@@ -7,6 +7,7 @@ export declare class LogicAgent extends BaseAgent {
     constructor(model?: string);
     getTools(): Anthropic.Tool[];
     handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
+    private grepDirectory;
     buildSystemPrompt(scenario: Scenario): string;
 }
 //# sourceMappingURL=logic-agent.d.ts.map
