@@ -6,6 +6,8 @@ import { validateCommand } from "./commands/validate.js";
 import { generateCommand } from "./commands/generate.js";
 import { gapsCommand } from "./commands/gaps.js";
 import { flakyCommand } from "./commands/flaky.js";
+import { bisectCommand } from "./commands/bisect.js";
+import { fixCommand } from "./commands/fix.js";
 import * as path from "path";
 const program = new Command();
 program
@@ -73,6 +75,34 @@ program
     .action(async (opts) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await gapsCommand(rootDir, { ref: opts?.ref });
+});
+program
+    .command("bisect <scenario>")
+    .description("Run git bisect to find the commit that broke a scenario")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .requiredOption("--good <ref>", "A git ref where the scenario passes")
+    .option("--bad <ref>", "A git ref where the scenario fails (default: HEAD)")
+    .option("--max-steps <n>", "Maximum bisect steps (default: 20)", v => parseInt(v, 10))
+    .action(async (scenario, opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await bisectCommand(scenario, rootDir, {
+        good: opts?.good,
+        bad: opts?.bad,
+        maxSteps: opts?.maxSteps,
+    });
+});
+program
+    .command("fix")
+    .description("Re-run failing scenarios and propose fixes via the FixAgent")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .option("--spec <name>", "Only fix failures from a specific spec")
+    .option("--auto-apply", "Apply proposed fixes directly (writes files)")
+    .action(async (opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await fixCommand(rootDir, {
+        spec: opts?.spec,
+        autoApply: opts?.autoApply,
+    });
 });
 program
     .command("flaky")
