@@ -26,7 +26,7 @@ export class GitTool {
   }
   
   async getCurrentBranch(): Promise<{ branch: string }> {
-    const branch = await this.git.revparse(["--abbrev-ref", "HEAD"]);
+    const branch = (await this.git.revparse(["--abbrev-ref", "HEAD"])).trim();
     return { branch };
   }
 

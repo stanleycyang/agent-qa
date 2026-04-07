@@ -43,9 +43,12 @@ export abstract class BaseAgent {
   protected async handleWriteTool(name: string, input: Record<string, unknown>): Promise<unknown> {
     if (name !== "write_file" || !this.allowWrites) return null;
     const relPath = input.path as string;
-    // Resolve and verify the path stays within writeRoot to prevent escapes
-    const fullPath = path.resolve(this.writeRoot, relPath);
-    if (!fullPath.startsWith(path.resolve(this.writeRoot))) {
+    // Use path.relative so a sibling like "/foo/barx" can't masquerade as a
+    // child of "/foo/bar" via String.startsWith.
+    const root = path.resolve(this.writeRoot);
+    const fullPath = path.resolve(root, relPath);
+    const rel = path.relative(root, fullPath);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
       return { error: "Path escapes write root", success: false };
     }
     await fs.mkdir(path.dirname(fullPath), { recursive: true });

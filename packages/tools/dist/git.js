@@ -20,7 +20,7 @@ export class GitTool {
         return { success: true };
     }
     async getCurrentBranch() {
-        const branch = await this.git.revparse(["--abbrev-ref", "HEAD"]);
+        const branch = (await this.git.revparse(["--abbrev-ref", "HEAD"])).trim();
         return { branch };
     }
     async getCurrentSha() {

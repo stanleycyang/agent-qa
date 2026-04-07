@@ -1,4 +1,4 @@
-export type BrowserType = "chromium" | "firefox" | "webkit";
+import type { BrowserType } from "@agentqa/core";
 export interface BrowserLaunchOptions {
     headless?: boolean;
     browserType?: BrowserType;

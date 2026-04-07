@@ -36,16 +36,17 @@ export class SecurityAgent extends LogicAgent {
     const fs = await import("fs/promises");
     const findings: Array<{ pattern: string; line: string; severity: string }> = [];
 
+    // Patterns are non-global so `.test()` is stateless across lines.
     const SECRET_PATTERNS = [
-      { name: "AWS Access Key", regex: /AKIA[0-9A-Z]{16}/g, severity: "critical" },
-      { name: "AWS Secret Key", regex: /aws_secret_access_key.{0,30}['"][0-9a-zA-Z\/+]{40}['"]/gi, severity: "critical" },
-      { name: "GitHub Token", regex: /gh[pousr]_[a-zA-Z0-9]{36,}/g, severity: "critical" },
-      { name: "Generic API Key", regex: /api[_-]?key.{0,20}['"][a-zA-Z0-9]{20,}['"]/gi, severity: "high" },
-      { name: "Generic Secret", regex: /secret.{0,20}['"][a-zA-Z0-9]{16,}['"]/gi, severity: "high" },
-      { name: "Private Key", regex: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, severity: "critical" },
-      { name: "Slack Token", regex: /xox[pbar]-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}/g, severity: "critical" },
-      { name: "Stripe Key", regex: /sk_live_[0-9a-zA-Z]{24,}/g, severity: "critical" },
-      { name: "JWT Token", regex: /eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/g, severity: "high" },
+      { name: "AWS Access Key", regex: /AKIA[0-9A-Z]{16}/, severity: "critical" },
+      { name: "AWS Secret Key", regex: /aws_secret_access_key.{0,30}['"][0-9a-zA-Z\/+]{40}['"]/i, severity: "critical" },
+      { name: "GitHub Token", regex: /gh[pousr]_[a-zA-Z0-9]{36,}/, severity: "critical" },
+      { name: "Generic API Key", regex: /api[_-]?key.{0,20}['"][a-zA-Z0-9]{20,}['"]/i, severity: "high" },
+      { name: "Generic Secret", regex: /secret.{0,20}['"][a-zA-Z0-9]{16,}['"]/i, severity: "high" },
+      { name: "Private Key", regex: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/, severity: "critical" },
+      { name: "Slack Token", regex: /xox[pbar]-[0-9]{10,}-[0-9]{10,}-[a-zA-Z0-9]{20,}/, severity: "critical" },
+      { name: "Stripe Key", regex: /sk_live_[0-9a-zA-Z]{24,}/, severity: "critical" },
+      { name: "JWT Token", regex: /eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/, severity: "high" },
     ];
 
     try {
@@ -60,7 +61,6 @@ export class SecurityAgent extends LogicAgent {
               line: `${filePath}:${i + 1}: ${line.trim().substring(0, 100)}`,
               severity: pattern.severity,
             });
-            pattern.regex.lastIndex = 0; // Reset for global regex
           }
         }
       }

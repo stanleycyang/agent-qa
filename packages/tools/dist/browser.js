@@ -173,6 +173,9 @@ export class BrowserTool {
       const results = [];
       const tokens = desc.split(/\\s+/).filter(Boolean);
       const elements = document.querySelectorAll("button, a, input, [role], [data-testid], [aria-label]");
+      // Escape backslash and double-quote so attribute values can't break out
+      // of the [attr="..."] selector or inject sibling clauses.
+      const esc = (v) => String(v).replace(/\\\\/g, "\\\\\\\\").replace(/"/g, "\\\\\\"");
       for (const el of Array.from(elements)) {
         const text = (el.textContent || "").trim().toLowerCase();
         const aria = (el.getAttribute("aria-label") || "").toLowerCase();
@@ -181,13 +184,13 @@ export class BrowserTool {
         const score = tokens.filter(t => text.includes(t) || aria.includes(t) || placeholder.includes(t)).length;
         if (score > 0) {
           if (testid) {
-            results.push('[data-testid="' + testid + '"]');
+            results.push('[data-testid="' + esc(testid) + '"]');
           } else if (el.getAttribute("aria-label")) {
-            results.push('[aria-label="' + el.getAttribute("aria-label") + '"]');
-          } else if (el.id) {
+            results.push('[aria-label="' + esc(el.getAttribute("aria-label")) + '"]');
+          } else if (el.id && /^[A-Za-z][\\w-]*$/.test(el.id)) {
             results.push("#" + el.id);
           } else {
-            results.push(el.tagName.toLowerCase() + ':has-text("' + text.substring(0, 40) + '")');
+            results.push(el.tagName.toLowerCase() + ':has-text("' + esc(text.substring(0, 40)) + '")');
           }
         }
       }
