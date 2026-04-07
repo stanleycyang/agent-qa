@@ -100,6 +100,42 @@ export class BrowserTool {
         }
         return { success: true };
     }
+    /**
+     * Try to find an element matching a description by searching the DOM for
+     * common attributes (data-testid, aria-label, role, text content).
+     * Returns the first matching CSS selector or null.
+     * The eval function runs in the browser context where DOM globals exist.
+     */
+    async findElementByDescription(description) {
+        if (!this.page)
+            throw new Error("Browser not launched");
+        const candidates = await this.page.evaluate(`(() => {
+      const desc = ${JSON.stringify(description.toLowerCase())};
+      const results = [];
+      const tokens = desc.split(/\\s+/).filter(Boolean);
+      const elements = document.querySelectorAll("button, a, input, [role], [data-testid], [aria-label]");
+      for (const el of Array.from(elements)) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+        const testid = el.getAttribute("data-testid") || "";
+        const placeholder = (el.getAttribute("placeholder") || "").toLowerCase();
+        const score = tokens.filter(t => text.includes(t) || aria.includes(t) || placeholder.includes(t)).length;
+        if (score > 0) {
+          if (testid) {
+            results.push('[data-testid="' + testid + '"]');
+          } else if (el.getAttribute("aria-label")) {
+            results.push('[aria-label="' + el.getAttribute("aria-label") + '"]');
+          } else if (el.id) {
+            results.push("#" + el.id);
+          } else {
+            results.push(el.tagName.toLowerCase() + ':has-text("' + text.substring(0, 40) + '")');
+          }
+        }
+      }
+      return results.slice(0, 5);
+    })()`);
+        return { selector: candidates[0] ?? null, matches: candidates };
+    }
     async close() {
         if (this.browser) {
             await this.browser.close();

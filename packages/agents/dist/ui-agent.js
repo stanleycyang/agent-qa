@@ -32,6 +32,86 @@ export class UIAgent extends BaseAgent {
         const result = await this.browser.screenshot(savePath);
         return result.base64;
     }
+    /** Track auto-heal events so the CLI can surface suggestions to the user. */
+    healEvents = [];
+    getHealEvents() {
+        return this.healEvents;
+    }
+    /**
+     * Click with auto-heal: if the click fails, take a screenshot, ask the
+     * vision model where the intended element is, and retry once with the new selector.
+     */
+    async clickWithHeal(selector, intent) {
+        try {
+            return await this.browser.click(selector);
+        }
+        catch (err) {
+            const healed = await this.healSelector(selector, intent ?? "click target");
+            if (!healed) {
+                return { error: err.message, success: false, healed: false };
+            }
+            try {
+                await this.browser.click(healed);
+                this.healEvents.push({
+                    original: selector,
+                    healed,
+                    reasoning: `click failed, healed via DOM search`,
+                });
+                return { success: true, healed: true, original_selector: selector, healed_selector: healed };
+            }
+            catch (retryErr) {
+                return { error: retryErr.message, success: false, healed: false, attempted: healed };
+            }
+        }
+    }
+    async typeWithHeal(selector, text, intent) {
+        try {
+            return await this.browser.type(selector, text);
+        }
+        catch (err) {
+            const healed = await this.healSelector(selector, intent ?? `input field for "${text}"`);
+            if (!healed) {
+                return { error: err.message, success: false, healed: false };
+            }
+            try {
+                await this.browser.type(healed, text);
+                this.healEvents.push({
+                    original: selector,
+                    healed,
+                    reasoning: `type failed, healed via DOM search`,
+                });
+                return { success: true, healed: true, original_selector: selector, healed_selector: healed };
+            }
+            catch (retryErr) {
+                return { error: retryErr.message, success: false, healed: false, attempted: healed };
+            }
+        }
+    }
+    async healSelector(originalSelector, intent) {
+        // First try a structural DOM search (cheap, no LLM call)
+        try {
+            const found = await this.browser.findElementByDescription(intent);
+            if (found.selector)
+                return found.selector;
+        }
+        catch {
+            // Fall through to vision-based heal
+        }
+        // Vision-based heal: take a screenshot and ask the model
+        try {
+            const screenshot = await this.browser.screenshot();
+            const result = await this.assertions.assertScreenshot(screenshot.base64, `Looking for an element matching this intent: "${intent}". The original selector "${originalSelector}" did not match anything. Identify the most likely element on the page and describe it precisely (text content, role, position).`);
+            const description = result.reasoning;
+            if (description) {
+                const found = await this.browser.findElementByDescription(description);
+                return found.selector;
+            }
+        }
+        catch {
+            // Heal failed silently
+        }
+        return null;
+    }
     getTools() {
         return [
             {
@@ -47,23 +127,25 @@ export class UIAgent extends BaseAgent {
             },
             {
                 name: "click",
-                description: "Click an element by CSS selector. Use specific selectors like button[type='submit'], a[href='/cart'], or [data-testid='checkout-btn']. If you don't know the exact selector, use get_content first to inspect the page.",
+                description: "Click an element by CSS selector. Use specific selectors like button[type='submit'], a[href='/cart'], or [data-testid='checkout-btn']. If the selector fails, the framework auto-heals by searching for an element matching the 'intent' description. Always provide intent to enable auto-healing.",
                 input_schema: {
                     type: "object",
                     properties: {
-                        selector: { type: "string", description: "CSS selector for the element" }
+                        selector: { type: "string", description: "CSS selector for the element" },
+                        intent: { type: "string", description: "Natural language description of what element you're trying to click (e.g. 'submit order button', 'cart icon in header'). Used for auto-healing if the selector breaks." }
                     },
                     required: ["selector"]
                 }
             },
             {
                 name: "type",
-                description: "Type text into an input field. Clears existing content first.",
+                description: "Type text into an input field. Clears existing content first. Auto-heals if selector fails (provide intent).",
                 input_schema: {
                     type: "object",
                     properties: {
                         selector: { type: "string", description: "CSS selector for the input" },
-                        text: { type: "string", description: "Text to type" }
+                        text: { type: "string", description: "Text to type" },
+                        intent: { type: "string", description: "Natural language description of the input field (e.g. 'email address field', 'search box'). Used for auto-healing." }
                     },
                     required: ["selector", "text"]
                 }
@@ -217,9 +299,9 @@ export class UIAgent extends BaseAgent {
             case "navigate":
                 return this.browser.navigate(input.url);
             case "click":
-                return this.browser.click(input.selector);
+                return this.clickWithHeal(input.selector, input.intent);
             case "type":
-                return this.browser.type(input.selector, input.text);
+                return this.typeWithHeal(input.selector, input.text, input.intent);
             case "screenshot":
                 return this.browser.screenshot();
             case "get_content":

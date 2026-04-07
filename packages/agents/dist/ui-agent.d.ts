@@ -20,6 +20,16 @@ export declare class UIAgent extends BaseAgent {
     initialize(): Promise<void>;
     cleanup(): Promise<void>;
     captureScreenshot(savePath: string): Promise<string>;
+    /** Track auto-heal events so the CLI can surface suggestions to the user. */
+    private healEvents;
+    getHealEvents(): typeof this.healEvents;
+    /**
+     * Click with auto-heal: if the click fails, take a screenshot, ask the
+     * vision model where the intended element is, and retry once with the new selector.
+     */
+    private clickWithHeal;
+    private typeWithHeal;
+    private healSelector;
     getTools(): Anthropic.Tool[];
     handleToolCall(name: string, input: Record<string, unknown>): Promise<unknown>;
     buildSystemPrompt(scenario: Scenario): string;

@@ -51,6 +51,16 @@ export declare class BrowserTool {
     scroll(selector?: string, direction?: "up" | "down"): Promise<{
         success: boolean;
     }>;
+    /**
+     * Try to find an element matching a description by searching the DOM for
+     * common attributes (data-testid, aria-label, role, text content).
+     * Returns the first matching CSS selector or null.
+     * The eval function runs in the browser context where DOM globals exist.
+     */
+    findElementByDescription(description: string): Promise<{
+        selector: string | null;
+        matches: string[];
+    }>;
     close(): Promise<void>;
 }
 //# sourceMappingURL=browser.d.ts.map

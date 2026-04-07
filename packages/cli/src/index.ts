@@ -5,6 +5,7 @@ import { initCommand } from "./commands/init.js";
 import { validateCommand } from "./commands/validate.js";
 import { generateCommand } from "./commands/generate.js";
 import { gapsCommand } from "./commands/gaps.js";
+import { flakyCommand } from "./commands/flaky.js";
 import * as path from "path";
 
 const program = new Command();
@@ -78,6 +79,15 @@ program
   .action(async (opts?: any) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await gapsCommand(rootDir, { ref: opts?.ref });
+  });
+
+program
+  .command("flaky")
+  .description("List flaky scenarios based on run history")
+  .option("-d, --dir <path>", "Root directory", process.cwd())
+  .action(async (opts?: any) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await flakyCommand(rootDir);
   });
 
 program

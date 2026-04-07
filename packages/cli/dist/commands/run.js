@@ -4,7 +4,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs } from "@agentqa/core";
 import { UIAgent, APIAgent, LogicAgent, ReporterAgent } from "@agentqa/agents";
-import { BaselineStore } from "@agentqa/tools";
+import { BaselineStore, HistoryStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 export async function runCommand(specName, rootDir = process.cwd(), options = {}) {
     const { verbose = false, json = false, dryRun = false, watch = false } = options;
@@ -97,7 +97,10 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
     const screenshotOnFailure = config.execution?.screenshot_on_failure ?? false;
     const concurrency = config.execution?.concurrency ?? 1;
     const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
+    const perfThreshold = config.execution?.perf_regression_threshold ?? 2.0;
+    const flakyThreshold = config.execution?.flaky_threshold ?? 0.3;
     const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
+    const historyStore = new HistoryStore(path.join(rootDir, ".agentqa", "history.json"));
     const reporter = new ReporterAgent();
     if (options.updateBaselines) {
         log(chalk.blue("📸 Baseline update mode — all baselines will be refreshed\n"));
@@ -113,6 +116,9 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
         verbose,
         json,
         baselineStore,
+        historyStore,
+        perfThreshold,
+        flakyThreshold,
         updateBaselines: options.updateBaselines ?? false,
     }, log, config);
     // Summary
@@ -156,7 +162,7 @@ async function runSpecsConcurrently(specEntries, runConfig, log, config) {
 }
 async function runSpec(entry, runConfig, log, config) {
     const { spec } = entry;
-    const { timeoutMs, maxRetries, verbose, json } = runConfig;
+    const { timeoutMs, maxRetries, verbose, json, historyStore, perfThreshold, flakyThreshold } = runConfig;
     log(`\n${chalk.bold(`🚀 Running ${spec.name}`)} (${spec.scenarios.length} scenarios)...`);
     const specStart = Date.now();
     const scenarioResults = [];
@@ -174,9 +180,34 @@ async function runSpec(entry, runConfig, log, config) {
                 api_url: resolveEnv(config.environment?.api_url) ?? "",
             };
             const result = await runWithRetries(() => executeScenario(spec, scenario, envVars, runConfig), maxRetries, scenario.name, timeoutMs, log);
+            // Annotate with flaky and perf regression info from history
+            const flakiness = await historyStore.getFlakiness(spec.name, scenario.name, 10);
+            if (flakiness.runs >= 5 && flakiness.rate >= flakyThreshold && flakiness.rate < 0.9) {
+                result.flaky = flakiness;
+            }
+            const median = await historyStore.getMedianDuration(spec.name, scenario.name);
+            if (median !== null && result.duration_ms > median * perfThreshold) {
+                result.perf_regression = {
+                    baseline_ms: median,
+                    current_ms: result.duration_ms,
+                    ratio: result.duration_ms / median,
+                };
+            }
+            // Append to history (after annotation so we don't compare against ourselves)
+            await historyStore.append({
+                spec: spec.name,
+                scenario: scenario.name,
+                status: result.status,
+                duration_ms: result.duration_ms,
+                timestamp: Date.now(),
+            });
             const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
             if (result.status === "pass") {
-                scenarioSpinner.succeed(chalk.green(`  ✅ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
+                const flakyTag = result.flaky ? chalk.yellow(" 🟡 flaky") : "";
+                const perfTag = result.perf_regression
+                    ? chalk.yellow(` ⚠ ${result.perf_regression.ratio.toFixed(1)}× slower than baseline`)
+                    : "";
+                scenarioSpinner.succeed(chalk.green(`  ✅ ${scenario.name}`) + chalk.gray(` (${duration}s)`) + flakyTag + perfTag);
             }
             else {
                 scenarioSpinner.fail(chalk.red(`  ❌ ${scenario.name}`) + chalk.gray(` (${duration}s)`));
