@@ -7,4 +7,5 @@ export * from "./spec-generator-agent.js";
 export * from "./fix-agent.js";
 export * from "./a11y-agent.js";
 export * from "./security-agent.js";
+export * from "./explain-agent.js";
 //# sourceMappingURL=index.js.map

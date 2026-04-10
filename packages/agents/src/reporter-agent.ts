@@ -1,7 +1,14 @@
-import { SpecResult, ScenarioResult } from "@agentqa/core";
+import { SpecResult, ScenarioResult, ProposedFix } from "@agentqa/core";
+
+export interface ReportOptions {
+  artifactUrl?: string;
+  impact?: Array<{ spec: string; score: number; reasons: string[]; matchedBy: string }>;
+  totalCost?: { input_tokens: number; output_tokens: number; usd: number };
+  confidenceFloor?: number;
+}
 
 export class ReporterAgent {
-  generateMarkdown(results: SpecResult[], options?: { artifactUrl?: string }): string {
+  generateMarkdown(results: SpecResult[], options?: ReportOptions): string {
     const totalScenarios = results.reduce((sum, r) => sum + r.scenarios.length, 0);
     const passedScenarios = results.reduce(
       (sum, r) => sum + r.scenarios.filter(s => s.status === "pass").length,
@@ -12,69 +19,135 @@ export class ReporterAgent {
       (sum, r) => sum + r.scenarios.filter(s => s.status === "error").length,
       0
     );
-
     const totalDuration = results.reduce((sum, r) => sum + r.duration_ms, 0);
     const statusEmoji = failedScenarios > 0 ? "❌" : "✅";
 
-    let markdown = `## 🤖 AgentQA Results ${statusEmoji}\n\n`;
-    markdown += `**${results.length} specs · ${totalScenarios} scenarios · `;
-    markdown += `${passedScenarios} passed · ${failedScenarios} failed`;
-    if (errorScenarios > 0) markdown += ` · ${errorScenarios} errors`;
-    markdown += `** (${(totalDuration / 1000).toFixed(1)}s)\n\n`;
+    const parts: string[] = [];
 
-    for (const result of results) {
-      const specPassed = result.scenarios.filter(s => s.status === "pass").length;
-      const specTotal = result.scenarios.length;
-      const emoji = result.status === "pass" ? "✅" : "❌";
+    // --- Summary ---
+    let summary = `## 🤖 AgentQA Results ${statusEmoji}\n\n`;
+    summary += `**${results.length} specs · ${totalScenarios} scenarios · `;
+    summary += `${passedScenarios} passed · ${failedScenarios} failed`;
+    if (errorScenarios > 0) summary += ` · ${errorScenarios} errors`;
+    summary += `** (${(totalDuration / 1000).toFixed(1)}s)`;
+    if (options?.totalCost && options.totalCost.usd > 0) {
+      summary += ` · $${options.totalCost.usd.toFixed(4)}`;
+    }
+    if (options?.confidenceFloor !== undefined && options.confidenceFloor < 1.0) {
+      summary += ` · confidence floor: ${(options.confidenceFloor * 100).toFixed(0)}%`;
+    }
+    summary += `\n`;
+    parts.push(summary);
 
-      markdown += `### ${emoji} ${result.spec} (${specPassed}/${specTotal} passed)\n\n`;
+    // --- Impact section (when available) ---
+    if (options?.impact?.length) {
+      let impactMd = `\n### 🎯 Impact Analysis\n\n`;
+      impactMd += `Ran **${options.impact.length}** spec(s) based on diff analysis:\n\n`;
+      for (const item of options.impact) {
+        const matchIcon = item.matchedBy === "path" ? "📁" : item.matchedBy === "semantic" ? "🧠" : "📁🧠";
+        impactMd += `- ${matchIcon} **${item.spec}** (score: ${item.score.toFixed(2)}) — ${item.reasons.join(", ")}\n`;
+      }
+      impactMd += `\n`;
+      parts.push(impactMd);
+    }
 
-      for (const scenario of result.scenarios) {
-        const scenarioEmoji = scenario.status === "pass" ? "✅" : scenario.status === "error" ? "⚠️" : "❌";
-        const duration = (scenario.duration_ms / 1000).toFixed(1);
-        markdown += `- ${scenarioEmoji} ${scenario.scenario} (${duration}s)\n`;
+    // --- Failures section ---
+    const failedResults = results.filter(r => r.status !== "pass");
+    if (failedResults.length > 0) {
+      let failMd = `### ❌ Failures\n\n`;
+      for (const result of failedResults) {
+        for (const scenario of result.scenarios) {
+          if (scenario.status === "pass") continue;
+          const duration = (scenario.duration_ms / 1000).toFixed(1);
+          const scenarioEmoji = scenario.status === "error" ? "⚠️" : "❌";
+          failMd += `<details><summary>${scenarioEmoji} <strong>${result.spec}</strong> → ${scenario.scenario} (${duration}s)</summary>\n\n`;
 
-        if (scenario.status === "fail" || scenario.status === "error") {
-          // Use collapsible details for failed scenarios
-          markdown += `  <details><summary>Details</summary>\n\n`;
-
-          for (const expectation of scenario.expectations) {
-            if (expectation.status === "fail") {
-              markdown += `  > **Expected:** ${expectation.text}\n`;
-              if (expectation.evidence) {
-                markdown += `  > **Got:** ${expectation.evidence}\n`;
-              }
-              if (expectation.reasoning) {
-                markdown += `  > **Why:** ${expectation.reasoning}\n`;
-              }
-              if (expectation.confidence !== undefined) {
-                markdown += `  > **Confidence:** ${(expectation.confidence * 100).toFixed(0)}%\n`;
+          for (const exp of scenario.expectations) {
+            if (exp.status === "fail") {
+              failMd += `> **Expected:** ${exp.text}\n`;
+              if (exp.evidence) failMd += `> **Got:** ${exp.evidence}\n`;
+              if (exp.reasoning) failMd += `> **Why:** ${exp.reasoning}\n`;
+              if (exp.confidence !== undefined) {
+                failMd += `> **Confidence:** ${(exp.confidence * 100).toFixed(0)}%`;
+                if (exp.low_confidence) failMd += ` ⚠️ below threshold`;
+                failMd += `\n`;
               }
             }
           }
+
           if (scenario.error) {
-            markdown += `  > **Error:** ${scenario.error}\n`;
-          }
-          if (scenario.screenshots?.length) {
-            markdown += `  > **Screenshots:** ${scenario.screenshots.map(s => `\`${s}\``).join(", ")}\n`;
+            failMd += `> **Error:** ${scenario.error}\n`;
           }
 
-          markdown += `  </details>\n`;
+          if (scenario.screenshots?.length) {
+            failMd += `\n**Screenshots:**\n`;
+            for (const s of scenario.screenshots) {
+              failMd += `- \`${s}\`\n`;
+            }
+          }
+
+          // Proposed fix section
+          if (scenario.proposedFix) {
+            failMd += `\n**🔧 Proposed Fix** (confidence: ${(scenario.proposedFix.confidence * 100).toFixed(0)}%)`;
+            if (scenario.proposedFix.oversized) failMd += ` ⚠️ oversized — manual review required`;
+            failMd += `\n\n`;
+            failMd += `> ${scenario.proposedFix.summary}\n\n`;
+            for (const file of scenario.proposedFix.files) {
+              failMd += `\`${file.path}\`:\n`;
+              failMd += "```diff\n" + file.diff + "\n```\n";
+              if (file.rationale) failMd += `> ${file.rationale}\n`;
+              failMd += `\n`;
+            }
+          }
+
+          failMd += `</details>\n\n`;
         }
       }
-
-      markdown += `\n`;
+      parts.push(failMd);
     }
 
-    markdown += `---\n`;
-    markdown += `✅ ${passedScenarios} passed  ❌ ${failedScenarios} failed  `;
-    markdown += `(${(totalDuration / 1000).toFixed(1)}s)\n`;
+    // --- Passed section (collapsed) ---
+    const passedResults = results.filter(r => r.status === "pass");
+    if (passedResults.length > 0) {
+      let passMd = `<details><summary>✅ <strong>${passedScenarios} passed</strong></summary>\n\n`;
+      for (const result of passedResults) {
+        passMd += `**${result.spec}**\n`;
+        for (const scenario of result.scenarios) {
+          const duration = (scenario.duration_ms / 1000).toFixed(1);
+          let tags = "";
+          if (scenario.flaky) tags += ` 🟡 flaky (${(scenario.flaky.rate * 100).toFixed(0)}%)`;
+          if (scenario.perf_regression) tags += ` ⚠️ ${scenario.perf_regression.ratio.toFixed(1)}× slower`;
+          passMd += `- ✅ ${scenario.scenario} (${duration}s)${tags}\n`;
+        }
+        passMd += `\n`;
+      }
+      passMd += `</details>\n\n`;
+      parts.push(passMd);
+    }
+
+    // --- Footer ---
+    let footer = `---\n`;
+    footer += `✅ ${passedScenarios} passed  ❌ ${failedScenarios} failed  `;
+    footer += `(${(totalDuration / 1000).toFixed(1)}s)`;
+    if (options?.totalCost && options.totalCost.usd > 0) {
+      footer += `  💰 $${options.totalCost.usd.toFixed(4)}`;
+    }
+    footer += `\n`;
 
     if (options?.artifactUrl) {
-      markdown += `\n[View screenshots and artifacts](${options.artifactUrl})\n`;
+      footer += `\n[View screenshots and artifacts](${options.artifactUrl})\n`;
     }
 
-    return markdown;
+    parts.push(footer);
+
+    // Truncate if too large for GitHub (65k char limit)
+    const joined = parts.join("");
+    if (joined.length > 60000) {
+      const truncated = joined.substring(0, 59000);
+      return truncated + "\n\n> ⚠️ Report truncated — view full results in artifacts.\n";
+    }
+
+    return joined;
   }
 
   generateSummary(results: SpecResult[]): { passed: number; failed: number; errors: number; total: number } {

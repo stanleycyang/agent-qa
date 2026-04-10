@@ -1,14 +1,67 @@
 import { LogicAgent } from "./logic-agent.js";
+const DEFAULT_FIX_OPTIONS = {
+    mode: "propose",
+    minConfidence: 0.8,
+    maxFiles: 3,
+    maxLines: 50,
+    rootDir: process.cwd(),
+};
 /**
  * Reads a failing scenario result and proposes a code fix.
- * Inherits the full read/grep/git toolset from LogicAgent and adds the
- * built-in write_file tool when `enableWrites` is set.
+ * Inherits the full read/grep/git toolset from LogicAgent and adds a
+ * `propose_fix` tool for structured output.
  */
 export class FixAgent extends LogicAgent {
+    fixResult = null;
+    getTools() {
+        return [
+            ...super.getTools(),
+            {
+                name: "propose_fix",
+                description: "After investigating the failure, call this tool ONCE with your proposed fix. Include all files that need changes and a unified diff for each.",
+                input_schema: {
+                    type: "object",
+                    properties: {
+                        summary: { type: "string", description: "1-2 sentence summary of the root cause and fix" },
+                        confidence: { type: "number", description: "0.0-1.0 confidence that this fix resolves the failure" },
+                        files: {
+                            type: "array",
+                            items: {
+                                type: "object",
+                                properties: {
+                                    path: { type: "string", description: "File path relative to project root" },
+                                    diff: { type: "string", description: "Unified diff of the changes (--- a/file ... +++ b/file ...)" },
+                                    rationale: { type: "string", description: "Why this file needs to change" },
+                                },
+                                required: ["path", "diff", "rationale"],
+                            },
+                            description: "Files to modify",
+                        },
+                    },
+                    required: ["summary", "confidence", "files"],
+                },
+            },
+        ];
+    }
+    async handleToolCall(name, input) {
+        if (name === "propose_fix") {
+            const files = input.files ?? [];
+            const totalLines = files.reduce((sum, f) => sum + (f.diff?.split("\n").length ?? 0), 0);
+            this.fixResult = {
+                summary: input.summary ?? "",
+                confidence: input.confidence ?? 0,
+                files: files.map((f) => ({
+                    path: f.path ?? "",
+                    diff: f.diff ?? "",
+                    rationale: f.rationale ?? "",
+                })),
+                oversized: false,
+            };
+            return { success: true, message: "Fix proposal recorded." };
+        }
+        return super.handleToolCall(name, input);
+    }
     buildSystemPrompt(_scenario) {
-        const writeNote = this.allowWrites
-            ? "\n\nYou have access to the write_file tool — use it to apply fixes directly. Always read the file first, then write the full updated content."
-            : "\n\nYou cannot write files directly. Output the proposed fix as a unified diff in a fenced code block.";
         return `You are a senior engineer fixing a failing AgentQA test.
 
 Your job: read the test failure, investigate the codebase, find the root cause, and propose a fix.
@@ -27,18 +80,21 @@ Your job: read the test failure, investigate the codebase, find the root cause, 
 - **Safe**: avoid changes that could break other features
 
 ## Output
-After investigating, output your analysis followed by the fix:
-
-1. **Root cause**: 1-2 sentences explaining what's broken
-2. **Fix**: the actual code change${writeNote}
-
-If you can't determine a fix with confidence, explain what you found and what additional context you'd need.`;
+After investigating, you MUST call the propose_fix tool exactly once with your analysis and fix.
+Include a unified diff for each file that needs to change.
+If you can't determine a fix with confidence, still call propose_fix with confidence: 0.3 and explain what you found.`;
     }
     /**
-     * Investigate a failing scenario and propose (or apply) a fix.
+     * Investigate a failing scenario and return a structured fix proposal.
      */
-    async fixFailure(spec, result) {
+    async fixFailure(spec, result, opts) {
+        const options = { ...DEFAULT_FIX_OPTIONS, ...opts };
         this.toolCalls = [];
+        this.fixResult = null;
+        // Never enable writes in propose mode
+        if (options.mode === "apply") {
+            this.enableWrites(options.rootDir);
+        }
         const failedExpectations = result.expectations
             .filter(e => e.status === "fail")
             .map(e => `- ${e.text}\n  Got: ${e.evidence ?? "n/a"}\n  Reasoning: ${e.reasoning ?? "n/a"}`)
@@ -60,10 +116,28 @@ ${failedExpectations || "(none — scenario errored)"}
 Recent agent actions:
 ${traceSummary}
 
-Investigate the codebase and propose a fix.`;
-        return this.runConversation(this.buildSystemPrompt({}), context, {
+Investigate the codebase and call propose_fix with your analysis.`;
+        await this.runConversation(this.buildSystemPrompt({}), context, {
             maxToolResultBytes: 8000,
         });
+        // If the model didn't call propose_fix, synthesize from its text output
+        if (!this.fixResult) {
+            this.fixResult = {
+                summary: "Agent did not produce a structured fix proposal.",
+                confidence: 0.3,
+                files: [],
+                oversized: false,
+            };
+        }
+        // Validate against limits
+        if (this.fixResult.files.length > options.maxFiles) {
+            this.fixResult.oversized = true;
+        }
+        const totalLines = this.fixResult.files.reduce((sum, f) => sum + f.diff.split("\n").length, 0);
+        if (totalLines > options.maxLines) {
+            this.fixResult.oversized = true;
+        }
+        return this.fixResult;
     }
 }
 //# sourceMappingURL=fix-agent.js.map

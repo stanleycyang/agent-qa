@@ -56,6 +56,15 @@ export declare class HistoryStore {
      */
     getMedianDuration(spec: string, scenario: string, window?: number): Promise<number | null>;
     /**
+     * Find a specific failure entry by id.
+     * Supported id formats:
+     * - "last" — the most recent non-pass entry
+     * - "spec::scenario::timestamp" — exact match
+     */
+    findEntry(failureId: string): Promise<HistoryEntry | null>;
+    /** Return the N most recent non-pass entries. */
+    listRecentFailures(n?: number): Promise<HistoryEntry[]>;
+    /**
      * Group all entries by (spec, scenario) and compute per-scenario stats.
      * Single-pass over the history. Used by the `flaky` command.
      */

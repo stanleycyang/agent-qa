@@ -99,6 +99,52 @@ export class HistoryStore {
         return durations[Math.floor(durations.length / 2)];
     }
     /**
+     * Find a specific failure entry by id.
+     * Supported id formats:
+     * - "last" — the most recent non-pass entry
+     * - "spec::scenario::timestamp" — exact match
+     */
+    async findEntry(failureId) {
+        const all = await this.ensureLoaded();
+        if (failureId === "last") {
+            for (let i = all.length - 1; i >= 0; i--) {
+                if (all[i].status !== "pass")
+                    return all[i];
+            }
+            return null;
+        }
+        // Parse "spec::scenario::timestamp"
+        const parts = failureId.split("::");
+        if (parts.length >= 3) {
+            const [spec, scenario, ts] = parts;
+            const timestamp = parseInt(ts, 10);
+            for (let i = all.length - 1; i >= 0; i--) {
+                const e = all[i];
+                if (e.spec === spec && e.scenario === scenario && e.timestamp === timestamp) {
+                    return e;
+                }
+            }
+        }
+        // Fuzzy: try matching just the scenario name
+        for (let i = all.length - 1; i >= 0; i--) {
+            const e = all[i];
+            if ((e.scenario.toLowerCase().includes(failureId.toLowerCase()) || e.spec.toLowerCase().includes(failureId.toLowerCase())) && e.status !== "pass") {
+                return e;
+            }
+        }
+        return null;
+    }
+    /** Return the N most recent non-pass entries. */
+    async listRecentFailures(n = 10) {
+        const all = await this.ensureLoaded();
+        const failures = [];
+        for (let i = all.length - 1; i >= 0 && failures.length < n; i--) {
+            if (all[i].status !== "pass")
+                failures.push(all[i]);
+        }
+        return failures;
+    }
+    /**
      * Group all entries by (spec, scenario) and compute per-scenario stats.
      * Single-pass over the history. Used by the `flaky` command.
      */

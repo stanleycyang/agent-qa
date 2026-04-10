@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { emptyUsage } from "@agentqa/core";
 import * as fs from "fs/promises";
 import * as path from "path";
 export class BaseAgent {
@@ -7,9 +8,16 @@ export class BaseAgent {
     toolCalls = [];
     allowWrites = false;
     writeRoot = process.cwd();
+    tokenUsage = emptyUsage();
     constructor(model = "claude-opus-4-5") {
         this.client = new Anthropic();
         this.model = model;
+    }
+    /** Get accumulated token usage and reset the counter. */
+    getAndResetUsage() {
+        const usage = { ...this.tokenUsage };
+        this.tokenUsage = emptyUsage();
+        return usage;
     }
     /** Enable file writes from within the agent loop. Used by fix-agent and auto-heal. */
     enableWrites(rootDir = process.cwd()) {
@@ -71,6 +79,13 @@ export class BaseAgent {
                 tools,
                 messages,
             });
+            // Accumulate token usage
+            if (response.usage) {
+                this.tokenUsage.input_tokens += response.usage.input_tokens ?? 0;
+                this.tokenUsage.output_tokens += response.usage.output_tokens ?? 0;
+                this.tokenUsage.cache_read_tokens += response.usage.cache_read_input_tokens ?? 0;
+                this.tokenUsage.cache_creation_tokens += response.usage.cache_creation_input_tokens ?? 0;
+            }
             messages.push({ role: "assistant", content: response.content });
             if (response.stop_reason === "end_turn") {
                 return response.content
@@ -110,10 +125,13 @@ export class BaseAgent {
     }
     async runScenario(scenario, environment) {
         this.toolCalls = [];
+        this.tokenUsage = emptyUsage();
         const start = Date.now();
         const userPrompt = this.buildUserPrompt(scenario, environment);
         const finalText = await this.runConversation(this.buildSystemPrompt(scenario), userPrompt);
-        return this.parseResult(scenario, finalText, start);
+        const result = this.parseResult(scenario, finalText, start);
+        result.tokenUsage = this.getAndResetUsage();
+        return result;
     }
     buildUserPrompt(scenario, environment) {
         const steps = scenario.steps?.join("\n") || scenario.review?.join("\n") || "";

@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ToolCall, ScenarioResult, Scenario } from "@agentqa/core";
+import { ToolCall, ScenarioResult, Scenario, TokenUsage } from "@agentqa/core";
+import { emptyUsage } from "@agentqa/core";
 import * as fs from "fs/promises";
 import * as path from "path";
 
@@ -9,10 +10,18 @@ export abstract class BaseAgent {
   protected toolCalls: ToolCall[] = [];
   protected allowWrites: boolean = false;
   protected writeRoot: string = process.cwd();
+  protected tokenUsage: TokenUsage = emptyUsage();
 
   constructor(model = "claude-opus-4-5") {
     this.client = new Anthropic();
     this.model = model;
+  }
+
+  /** Get accumulated token usage and reset the counter. */
+  getAndResetUsage(): TokenUsage {
+    const usage = { ...this.tokenUsage };
+    this.tokenUsage = emptyUsage();
+    return usage;
   }
 
   /** Enable file writes from within the agent loop. Used by fix-agent and auto-heal. */
@@ -86,6 +95,14 @@ export abstract class BaseAgent {
         messages,
       });
 
+      // Accumulate token usage
+      if (response.usage) {
+        this.tokenUsage.input_tokens += response.usage.input_tokens ?? 0;
+        this.tokenUsage.output_tokens += response.usage.output_tokens ?? 0;
+        this.tokenUsage.cache_read_tokens += (response.usage as any).cache_read_input_tokens ?? 0;
+        this.tokenUsage.cache_creation_tokens += (response.usage as any).cache_creation_input_tokens ?? 0;
+      }
+
       messages.push({ role: "assistant", content: response.content });
 
       if (response.stop_reason === "end_turn") {
@@ -131,10 +148,13 @@ export abstract class BaseAgent {
 
   async runScenario(scenario: Scenario, environment: Record<string, string>): Promise<ScenarioResult> {
     this.toolCalls = [];
+    this.tokenUsage = emptyUsage();
     const start = Date.now();
     const userPrompt = this.buildUserPrompt(scenario, environment);
     const finalText = await this.runConversation(this.buildSystemPrompt(scenario), userPrompt);
-    return this.parseResult(scenario, finalText, start);
+    const result = this.parseResult(scenario, finalText, start);
+    result.tokenUsage = this.getAndResetUsage();
+    return result;
   }
 
   private buildUserPrompt(scenario: Scenario, environment: Record<string, string>): string {

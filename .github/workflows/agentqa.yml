@@ -70,75 +70,27 @@ jobs:
           path: .agentqa/replays/
           if-no-files-found: ignore
 
+      - name: Generate PR comment
+        if: github.event_name == 'pull_request'
+        run: |
+          npx agentqa report --input agentqa-results.json --out comment.md || true
+
       - name: Post PR comment
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let results;
+            let body;
             try {
-              results = JSON.parse(fs.readFileSync('agentqa-results.json', 'utf8'));
+              body = fs.readFileSync('comment.md', 'utf8');
             } catch {
-              return; // No results to post
+              return; // No report generated
             }
 
-            const { summary, duration_ms } = results;
-            const passed = summary?.passed ?? 0;
-            const failed = summary?.failed ?? 0;
-            const total = summary?.total ?? 0;
-            const duration = ((duration_ms ?? 0) / 1000).toFixed(1);
-            const status = failed > 0 ? '❌' : '✅';
+            if (!body.trim()) return;
 
-            let body = `## 🤖 AgentQA Results ${status}\n\n`;
-            body += `**${total} scenarios · ${passed} passed · ${failed} failed** (${duration}s)\n\n`;
-
-            if (results.results) {
-              for (const spec of results.results) {
-                const emoji = spec.status === 'pass' ? '✅' : '❌';
-                const specPassed = spec.scenarios.filter(s => s.status === 'pass').length;
-                body += `### ${emoji} ${spec.spec} (${specPassed}/${spec.scenarios.length})\n\n`;
-
-                for (const scenario of spec.scenarios) {
-                  const sEmoji = scenario.status === 'pass' ? '✅' : '❌';
-                  body += `- ${sEmoji} ${scenario.scenario}`;
-                  if (scenario.duration_ms) body += ` (${(scenario.duration_ms / 1000).toFixed(1)}s)`;
-                  body += '\n';
-
-                  if (scenario.flaky) {
-                    body += `  > 🟡 **Flaky:** ${(scenario.flaky.rate * 100).toFixed(0)}% failure rate over ${scenario.flaky.runs} runs\n`;
-                  }
-                  if (scenario.perf_regression) {
-                    body += `  > ⚠️ **Performance regression:** ${scenario.perf_regression.ratio.toFixed(1)}× slower than baseline (${(scenario.perf_regression.baseline_ms/1000).toFixed(1)}s → ${(scenario.perf_regression.current_ms/1000).toFixed(1)}s)\n`;
-                  }
-                  if (scenario.status !== 'pass') {
-                    body += `  <details><summary>Failure details</summary>\n\n`;
-                    for (const exp of scenario.expectations) {
-                      if (exp.status === 'fail') {
-                        body += `  > **Expected:** ${exp.text}\n`;
-                        if (exp.evidence) body += `  > **Got:** ${exp.evidence}\n`;
-                        if (exp.reasoning) body += `  > **Why:** ${exp.reasoning}\n`;
-                        if (exp.confidence !== undefined) body += `  > **Confidence:** ${(exp.confidence * 100).toFixed(0)}%\n`;
-                      }
-                    }
-                    if (scenario.error) body += `  > **Error:** ${scenario.error}\n`;
-                    if (scenario.screenshots?.length) {
-                      body += `  > **Screenshots:** see \`agentqa-screenshots\` artifact\n`;
-                    }
-                    if (scenario.video_path) {
-                      body += `  > **🎬 Session replay:** see \`agentqa-replays\` artifact (${scenario.video_path.split('/').pop()})\n`;
-                    }
-                    if (scenario.network_path) {
-                      body += `  > **🌐 Network log + console + trace** included in replay artifact\n`;
-                    }
-                    body += `  </details>\n`;
-                  }
-                }
-                body += '\n';
-              }
-            }
-
-            body += `\n<sub>Run by [AgentQA](https://github.com/stanleycyang/agentqa) · `;
+            body += `\n\n<sub>Run by [AgentQA](https://github.com/stanleycyang/agentqa) · `;
             body += `[View artifacts](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})</sub>`;
 
             // Find and update existing comment or create new one

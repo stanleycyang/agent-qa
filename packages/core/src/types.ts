@@ -30,12 +30,34 @@ export interface AgentQASpec {
   scenarios: Scenario[];
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+}
+
+export interface ProposedFixFile {
+  path: string;
+  diff: string;
+  rationale: string;
+}
+
+export interface ProposedFix {
+  files: ProposedFixFile[];
+  confidence: number;
+  summary: string;
+  oversized: boolean;
+  tokenUsage?: TokenUsage;
+}
+
 export interface ExpectationResult {
   text: string;
   status: "pass" | "fail" | "skip";
   confidence?: number;
   evidence?: string;
   reasoning?: string;
+  low_confidence?: boolean;
 }
 
 export interface ScenarioResult {
@@ -53,6 +75,8 @@ export interface ScenarioResult {
   flaky?: { rate: number; runs: number };
   perf_regression?: { baseline_ms: number; current_ms: number; ratio: number };
   healed_selectors?: Array<{ original: string; healed: string; reasoning: string }>;
+  tokenUsage?: TokenUsage;
+  proposedFix?: ProposedFix;
 }
 
 export interface SpecResult {
@@ -106,6 +130,7 @@ export interface AgentQAConfig {
     flaky_threshold?: number;
     perf_regression_threshold?: number;
     record_video_on_failure?: boolean;
+    min_confidence?: number;
   };
   environment?: {
     preview_url?: string;
@@ -117,6 +142,13 @@ export interface AgentQAConfig {
     github_status?: boolean;
     verbose?: boolean;
     artifact_screenshots?: boolean;
+  };
+  auto_fix?: {
+    enabled?: boolean;
+    mode?: "propose" | "apply";
+    min_confidence?: number;
+    max_files?: number;
+    max_lines?: number;
   };
   integrations?: {
     figma_token?: string;

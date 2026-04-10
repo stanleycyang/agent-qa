@@ -1,12 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { ToolCall, ScenarioResult, Scenario } from "@agentqa/core";
+import { ToolCall, ScenarioResult, Scenario, TokenUsage } from "@agentqa/core";
 export declare abstract class BaseAgent {
     protected client: Anthropic;
     protected model: string;
     protected toolCalls: ToolCall[];
     protected allowWrites: boolean;
     protected writeRoot: string;
+    protected tokenUsage: TokenUsage;
     constructor(model?: string);
+    /** Get accumulated token usage and reset the counter. */
+    getAndResetUsage(): TokenUsage;
     /** Enable file writes from within the agent loop. Used by fix-agent and auto-heal. */
     enableWrites(rootDir?: string): void;
     /** Built-in write_file tool exposed when allowWrites is true. */
