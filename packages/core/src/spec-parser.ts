@@ -54,6 +54,7 @@ const AgentQAConfigSchema = z.object({
     flaky_threshold: z.number().optional(),
     perf_regression_threshold: z.number().optional(),
     record_video_on_failure: z.boolean().optional(),
+    min_confidence: z.number().optional(),
   }).optional(),
   environment: z.object({
     preview_url: z.string().optional(),
@@ -65,6 +66,13 @@ const AgentQAConfigSchema = z.object({
     github_status: z.boolean().optional(),
     verbose: z.boolean().optional(),
     artifact_screenshots: z.boolean().optional(),
+  }).optional(),
+  auto_fix: z.object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(["propose", "apply"]).optional(),
+    min_confidence: z.number().optional(),
+    max_files: z.number().optional(),
+    max_lines: z.number().optional(),
   }).optional(),
   integrations: z.object({
     figma_token: z.string().optional(),

@@ -2,11 +2,12 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import chalk from "chalk";
 import ora from "ora";
-import { loadAllSpecs } from "@agentqa/core";
-import { ReporterAgent } from "@agentqa/agents";
-import { BaselineStore, HistoryStore } from "@agentqa/tools";
+import { loadAllSpecs, emptyUsage, mergeUsage, computeCost } from "@agentqa/core";
+import { ReporterAgent, FixAgent } from "@agentqa/agents";
+import { BaselineStore, HistoryStore, GitTool } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 import { executeScenario, resolveEnv } from "../scenario-runner.js";
+export { runSpecsFiltered };
 export async function runCommand(specName, rootDir = process.cwd(), options = {}) {
     const { verbose = false, json = false, dryRun = false, watch = false } = options;
     const log = json ? (..._args) => { } : console.log;
@@ -93,55 +94,52 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
         log(chalk.green("\nAll specs valid. Ready to run."));
         return;
     }
-    const timeoutMs = (config.execution?.timeout_per_scenario ?? 120) * 1000;
-    const maxRetries = config.execution?.retries ?? 0;
-    const screenshotOnFailure = config.execution?.screenshot_on_failure ?? false;
-    const concurrency = config.execution?.concurrency ?? 1;
-    const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
-    const perfThreshold = config.execution?.perf_regression_threshold ?? 2.0;
-    const flakyThreshold = config.execution?.flaky_threshold ?? 0.3;
-    const recordVideoOnFailure = config.execution?.record_video_on_failure ?? false;
-    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
-    const historyStore = new HistoryStore(path.join(rootDir, ".agentqa", "history.json"));
     const reporter = new ReporterAgent();
     if (options.updateBaselines) {
         log(chalk.blue("📸 Baseline update mode — all baselines will be refreshed\n"));
     }
-    // Run specs with concurrency. Always flush history afterwards so a crash
-    // mid-run still preserves the entries we already buffered.
-    let allResults;
-    try {
-        allResults = await runSpecsConcurrently(specEntries, {
-            timeoutMs,
-            maxRetries,
-            screenshotOnFailure,
-            agentModel,
-            rootDir,
-            concurrency,
-            verbose,
-            json,
-            baselineStore,
-            historyStore,
-            perfThreshold,
-            flakyThreshold,
-            recordVideoOnFailure,
-            updateBaselines: options.updateBaselines ?? false,
-        }, log, config);
-    }
-    finally {
-        await historyStore.flush();
-    }
+    const { results: allResults, costInfo, confidenceFloor } = await runSpecsFiltered(specEntries, rootDir, options, config);
     // Summary
     const summary = reporter.generateSummary(allResults);
     const totalDuration = allResults.reduce((sum, r) => sum + r.duration_ms, 0);
     if (json) {
-        console.log(JSON.stringify({ results: allResults, summary, duration_ms: totalDuration }, null, 2));
+        console.log(JSON.stringify({
+            results: allResults,
+            summary,
+            duration_ms: totalDuration,
+            cost: costInfo,
+            confidence_floor: confidenceFloor,
+        }, null, 2));
     }
     else {
         log("\n" + chalk.gray("━".repeat(40)));
         const passStr = chalk.green(`✅ ${summary.passed} passed`);
         const failStr = summary.failed > 0 ? chalk.red(`  ❌ ${summary.failed} failed`) : "";
-        log(`${passStr}${failStr}  ${chalk.gray(`(total: ${(totalDuration / 1000).toFixed(1)}s)`)}`);
+        const costStr = costInfo.usd > 0
+            ? chalk.gray(`  💰 $${costInfo.usd.toFixed(4)}`)
+            : "";
+        log(`${passStr}${failStr}  ${chalk.gray(`(total: ${(totalDuration / 1000).toFixed(1)}s)`)}${costStr}`);
+        // Matrix grid summary (when viewports/browsers are used)
+        const matrixScenarios = allResults.flatMap(r => r.scenarios.filter(s => s.viewport || s.browser));
+        if (matrixScenarios.length > 0) {
+            const dimensions = new Set();
+            const scenarioNames = new Set();
+            const grid = new Map();
+            for (const s of matrixScenarios) {
+                const dim = [s.viewport, s.browser].filter(Boolean).join("/") || "default";
+                dimensions.add(dim);
+                scenarioNames.add(s.scenario);
+                grid.set(`${s.scenario}::${dim}`, s.status === "pass" ? "✅" : "❌");
+            }
+            const dims = [...dimensions];
+            const maxNameLen = Math.max(...[...scenarioNames].map(n => n.length), 10);
+            log("\n" + chalk.bold("Matrix:"));
+            log(chalk.gray("  " + "".padEnd(maxNameLen) + "  " + dims.map(d => d.padEnd(10)).join("  ")));
+            for (const name of scenarioNames) {
+                const row = dims.map(d => (grid.get(`${name}::${d}`) ?? "⬜").padEnd(10)).join("  ");
+                log(`  ${name.padEnd(maxNameLen)}  ${row}`);
+            }
+        }
     }
     if (summary.failed > 0) {
         process.exit(1);
@@ -225,6 +223,7 @@ async function runSpec(entry, runConfig, log, config) {
                     status: result.status,
                     duration_ms: result.duration_ms,
                     timestamp: Date.now(),
+                    commit_sha: runConfig.commitSha || undefined,
                 });
                 const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
                 if (result.status === "pass") {
@@ -254,7 +253,42 @@ async function runSpec(entry, runConfig, log, config) {
                         log(chalk.gray(`       • ${tc.tool}(${JSON.stringify(tc.input).substring(0, 80)})`));
                     }
                 }
+                // Auto-fix: on failure, invoke FixAgent to propose a patch
+                if (result.status !== "pass" && runConfig.autoFix) {
+                    const fixSpinner = json
+                        ? { start: () => fixSpinner, succeed: (_m) => { }, fail: (_m) => { } }
+                        : ora(`     🔧 Investigating fix...`).start();
+                    if (!json)
+                        fixSpinner.start();
+                    try {
+                        const fixAgent = new FixAgent(runConfig.agentModel);
+                        const proposal = await fixAgent.fixFailure(spec.name, result, {
+                            mode: runConfig.autoFixMode,
+                            minConfidence: runConfig.autoFixMinConfidence,
+                            maxFiles: runConfig.autoFixMaxFiles,
+                            maxLines: runConfig.autoFixMaxLines,
+                            rootDir: runConfig.rootDir,
+                        });
+                        result.proposedFix = proposal;
+                        if (proposal.files.length > 0) {
+                            const tag = proposal.oversized ? " (oversized)" : "";
+                            fixSpinner.succeed(chalk.cyan(`     🔧 Fix proposed (${(proposal.confidence * 100).toFixed(0)}% confidence, ${proposal.files.length} file(s))${tag}`));
+                            if (!json)
+                                log(chalk.gray(`        ${proposal.summary}`));
+                        }
+                        else {
+                            fixSpinner.succeed(chalk.gray(`     🔧 No fix proposed — ${proposal.summary}`));
+                        }
+                    }
+                    catch (err) {
+                        fixSpinner.fail(chalk.gray(`     🔧 Fix investigation failed: ${err.message}`));
+                    }
+                }
                 scenarioResults.push(result);
+                // Streaming callback — emit result as soon as scenario completes
+                if (runConfig.onScenarioComplete) {
+                    runConfig.onScenarioComplete(spec.name, result);
+                }
             }
             catch (err) {
                 const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
@@ -321,6 +355,125 @@ async function runWithRetries(fn, retries, scenarioName, timeoutMs, log) {
         log(chalk.yellow(`  ↻ Retrying ${scenarioName} (attempt ${attempt + 1}/${maxAttempts})...`));
     }
     return lastResult;
+}
+/**
+ * Public entry point for running a pre-filtered set of specs.
+ * Used by `agentqa impact` and `agentqa run` to share the same execution pipeline.
+ */
+async function runSpecsFiltered(specEntries, rootDir, options, config) {
+    const { verbose = false, json = false } = options;
+    const log = json ? (..._args) => { } : console.log;
+    const timeoutMs = (config.execution?.timeout_per_scenario ?? 120) * 1000;
+    const maxRetries = config.execution?.retries ?? 0;
+    const screenshotOnFailure = config.execution?.screenshot_on_failure ?? false;
+    const concurrency = config.execution?.concurrency ?? 1;
+    const agentModel = config.model?.model ?? "claude-sonnet-4-20250514";
+    const perfThreshold = config.execution?.perf_regression_threshold ?? 2.0;
+    const flakyThreshold = config.execution?.flaky_threshold ?? 0.3;
+    const recordVideoOnFailure = config.execution?.record_video_on_failure ?? false;
+    const baselineStore = new BaselineStore(path.join(rootDir, ".agentqa", "baselines"));
+    const historyStore = new HistoryStore(path.join(rootDir, ".agentqa", "history.json"));
+    const autoFixConfig = config.auto_fix ?? {};
+    const autoFix = options.autoFix || autoFixConfig.enabled === true;
+    const noCache = options.noCache === true;
+    // Get current commit SHA for cache + history tracking
+    let commitSha = "";
+    try {
+        const git = new GitTool(rootDir);
+        commitSha = await git.getCurrentSha();
+    }
+    catch {
+        // Not a git repo or git not available
+    }
+    // Smart caching: skip specs that passed at this commit
+    let filteredEntries = specEntries;
+    if (commitSha && !noCache && !options.updateBaselines) {
+        const cached = [];
+        const toRun = [];
+        for (const entry of specEntries) {
+            const passed = await historyStore.getLastPassingForSpec(entry.spec.name, commitSha);
+            if (passed) {
+                cached.push(entry.spec.name);
+            }
+            else {
+                toRun.push(entry);
+            }
+        }
+        if (cached.length > 0) {
+            for (const name of cached) {
+                log(chalk.gray(`  ⏭ ${name} (cached — passed at ${commitSha.substring(0, 7)})`));
+            }
+        }
+        filteredEntries = toRun;
+    }
+    if (filteredEntries.length === 0) {
+        return { results: [], costInfo: { input_tokens: 0, output_tokens: 0, usd: 0 }, confidenceFloor: 1.0 };
+    }
+    let allResults;
+    try {
+        allResults = await runSpecsConcurrently(filteredEntries, {
+            timeoutMs, maxRetries, screenshotOnFailure, agentModel, rootDir,
+            concurrency, verbose, json, baselineStore, historyStore,
+            perfThreshold, flakyThreshold, recordVideoOnFailure,
+            updateBaselines: options.updateBaselines ?? false,
+            autoFix,
+            autoFixMode: autoFixConfig.mode ?? "propose",
+            autoFixMinConfidence: autoFixConfig.min_confidence ?? 0.8,
+            autoFixMaxFiles: autoFixConfig.max_files ?? 3,
+            autoFixMaxLines: autoFixConfig.max_lines ?? 50,
+            commitSha,
+            noCache,
+            onScenarioComplete: !json ? (specName, result) => {
+                const duration = (result.duration_ms / 1000).toFixed(1);
+                if (result.status === "pass") {
+                    const flakyTag = result.flaky ? chalk.yellow(" 🟡 flaky") : "";
+                    const perfTag = result.perf_regression
+                        ? chalk.yellow(` ⚠ ${result.perf_regression.ratio.toFixed(1)}× slower`)
+                        : "";
+                    log(chalk.green(`  ✅ ${result.scenario}`) + chalk.gray(` (${duration}s)`) + flakyTag + perfTag);
+                }
+                else {
+                    log(chalk.red(`  ❌ ${result.scenario}`) + chalk.gray(` (${duration}s)`));
+                    for (const exp of result.expectations) {
+                        if (exp.status === "fail") {
+                            log(chalk.gray(`     → Expected: "${exp.text}"`));
+                            if (exp.evidence)
+                                log(chalk.gray(`     → Got: ${exp.evidence}`));
+                        }
+                    }
+                }
+            } : undefined,
+        }, log, config);
+    }
+    finally {
+        await historyStore.flush();
+    }
+    // Aggregate cost + confidence
+    const minConfidenceFloor = config.execution?.min_confidence ?? 0;
+    let totalUsage = emptyUsage();
+    let confidenceFloor = 1.0;
+    for (const specResult of allResults) {
+        for (const sr of specResult.scenarios) {
+            if (sr.tokenUsage) {
+                totalUsage = mergeUsage(totalUsage, sr.tokenUsage);
+            }
+            for (const exp of sr.expectations) {
+                if (exp.confidence !== undefined && exp.status === "pass") {
+                    confidenceFloor = Math.min(confidenceFloor, exp.confidence);
+                }
+                if (minConfidenceFloor > 0 && exp.confidence !== undefined && exp.confidence < minConfidenceFloor && exp.status === "pass") {
+                    exp.low_confidence = true;
+                }
+            }
+        }
+    }
+    const totalCostUsd = computeCost(totalUsage, agentModel);
+    const costInfo = {
+        input_tokens: totalUsage.input_tokens,
+        output_tokens: totalUsage.output_tokens,
+        usd: Math.round(totalCostUsd * 10000) / 10000,
+    };
+    return { results: allResults, costInfo, confidenceFloor };
 }
 // --- Watch mode ---
 async function runWatchMode(specName, rootDir, specsDir, config, options) {

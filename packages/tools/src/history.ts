@@ -122,6 +122,66 @@ export class HistoryStore {
   }
 
   /**
+   * Find a specific failure entry by id.
+   * Supported id formats:
+   * - "last" — the most recent non-pass entry
+   * - "spec::scenario::timestamp" — exact match
+   */
+  async findEntry(failureId: string): Promise<HistoryEntry | null> {
+    const all = await this.ensureLoaded();
+
+    if (failureId === "last") {
+      for (let i = all.length - 1; i >= 0; i--) {
+        if (all[i].status !== "pass") return all[i];
+      }
+      return null;
+    }
+
+    // Parse "spec::scenario::timestamp"
+    const parts = failureId.split("::");
+    if (parts.length >= 3) {
+      const [spec, scenario, ts] = parts;
+      const timestamp = parseInt(ts, 10);
+      for (let i = all.length - 1; i >= 0; i--) {
+        const e = all[i];
+        if (e.spec === spec && e.scenario === scenario && e.timestamp === timestamp) {
+          return e;
+        }
+      }
+    }
+
+    // Fuzzy: try matching just the scenario name
+    for (let i = all.length - 1; i >= 0; i--) {
+      const e = all[i];
+      if ((e.scenario.toLowerCase().includes(failureId.toLowerCase()) || e.spec.toLowerCase().includes(failureId.toLowerCase())) && e.status !== "pass") {
+        return e;
+      }
+    }
+
+    return null;
+  }
+
+  /** Return the N most recent non-pass entries. */
+  async listRecentFailures(n = 10): Promise<HistoryEntry[]> {
+    const all = await this.ensureLoaded();
+    const failures: HistoryEntry[] = [];
+    for (let i = all.length - 1; i >= 0 && failures.length < n; i--) {
+      if (all[i].status !== "pass") failures.push(all[i]);
+    }
+    return failures;
+  }
+
+  /** Check if all scenarios of a spec passed at a given commit SHA. */
+  async getLastPassingForSpec(specName: string, sha: string): Promise<boolean> {
+    const all = await this.ensureLoaded();
+    // Find all entries for this spec at this SHA
+    const atCommit = all.filter(e => e.spec === specName && e.commit_sha === sha);
+    if (atCommit.length === 0) return false;
+    // All must be passes
+    return atCommit.every(e => e.status === "pass");
+  }
+
+  /**
    * Group all entries by (spec, scenario) and compute per-scenario stats.
    * Single-pass over the history. Used by the `flaky` command.
    */

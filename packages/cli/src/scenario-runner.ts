@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { AgentQASpec, Scenario, ScenarioResult, ViewportConfig, BrowserType } from "@agentqa/core";
+import { AgentQASpec, Scenario, ScenarioResult, ViewportConfig, BrowserType, detectPreviewUrl } from "@agentqa/core";
 import {
   UIAgent, APIAgent, LogicAgent, A11yAgent, SecurityAgent,
 } from "@agentqa/agents";
@@ -115,10 +115,19 @@ export async function executeScenario(
   return new LogicAgent(agentModel).runScenario(scenario, envVars);
 }
 
-/** Substitute {{ENV_VAR}} placeholders with values from process.env. */
+/** Substitute {{ENV_VAR}} placeholders with values from process.env.
+ *  Falls back to auto-detected preview URL for PREVIEW_URL. */
 export function resolveEnv(value?: string): string | undefined {
   if (!value) return undefined;
-  return value.replace(/\{\{(\w+)\}\}/g, (_, key) => process.env[key] ?? "");
+  return value.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    const envVal = process.env[key];
+    if (envVal) return envVal;
+    // Auto-detect preview URL when PREVIEW_URL placeholder is unset
+    if (key === "PREVIEW_URL") {
+      return detectPreviewUrl() ?? "";
+    }
+    return "";
+  });
 }
 
 function sanitize(s: string): string {

@@ -1,0 +1,1 @@
+{"version":3,"file":"explain.d.ts","sourceRoot":"","sources":["../../src/commands/explain.ts"],"names":[],"mappings":"AAOA,MAAM,WAAW,cAAc;IAC7B,GAAG,CAAC,EAAE,MAAM,CAAC;IACb,OAAO,CAAC,EAAE,OAAO,CAAC;CACnB;AAED,wBAAsB,cAAc,CAClC,SAAS,EAAE,MAAM,EACjB,OAAO,GAAE,MAAsB,EAC/B,OAAO,GAAE,cAAmB,GAC3B,OAAO,CAAC,IAAI,CAAC,CAiDf"}
