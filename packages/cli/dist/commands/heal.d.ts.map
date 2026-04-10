@@ -1,0 +1,1 @@
+{"version":3,"file":"heal.d.ts","sourceRoot":"","sources":["../../src/commands/heal.ts"],"names":[],"mappings":"AASA,MAAM,WAAW,WAAW;IAC1B,SAAS,CAAC,EAAE,MAAM,CAAC;IACnB,IAAI,CAAC,EAAE,MAAM,CAAC;IACd,SAAS,CAAC,EAAE,OAAO,CAAC;CACrB;AAED;;;GAGG;AACH,wBAAsB,WAAW,CAC/B,OAAO,GAAE,MAAsB,EAC/B,OAAO,GAAE,WAAgB,GACxB,OAAO,CAAC,IAAI,CAAC,CA4Hf"}

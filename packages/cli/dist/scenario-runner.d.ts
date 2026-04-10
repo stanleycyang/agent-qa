@@ -15,6 +15,7 @@ export interface ExecuteScenarioOptions {
  * Used by `agentqa run`, `agentqa fix`, and `agentqa bisect`.
  */
 export declare function executeScenario(spec: AgentQASpec, scenario: Scenario, envVars: Record<string, string>, options: ExecuteScenarioOptions): Promise<ScenarioResult>;
-/** Substitute {{ENV_VAR}} placeholders with values from process.env. */
+/** Substitute {{ENV_VAR}} placeholders with values from process.env.
+ *  Falls back to auto-detected preview URL for PREVIEW_URL. */
 export declare function resolveEnv(value?: string): string | undefined;
 //# sourceMappingURL=scenario-runner.d.ts.map

@@ -64,6 +64,8 @@ export declare class HistoryStore {
     findEntry(failureId: string): Promise<HistoryEntry | null>;
     /** Return the N most recent non-pass entries. */
     listRecentFailures(n?: number): Promise<HistoryEntry[]>;
+    /** Check if all scenarios of a spec passed at a given commit SHA. */
+    getLastPassingForSpec(specName: string, sha: string): Promise<boolean>;
     /**
      * Group all entries by (spec, scenario) and compute per-scenario stats.
      * Single-pass over the history. Used by the `flaky` command.

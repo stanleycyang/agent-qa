@@ -3,6 +3,7 @@ name: AgentQA
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  deployment_status:
   workflow_dispatch:
 
 permissions:

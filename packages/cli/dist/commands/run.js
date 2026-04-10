@@ -4,7 +4,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { loadAllSpecs, emptyUsage, mergeUsage, computeCost } from "@agentqa/core";
 import { ReporterAgent, FixAgent } from "@agentqa/agents";
-import { BaselineStore, HistoryStore } from "@agentqa/tools";
+import { BaselineStore, HistoryStore, GitTool } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 import { executeScenario, resolveEnv } from "../scenario-runner.js";
 export { runSpecsFiltered };
@@ -119,6 +119,27 @@ async function runOnce(specName, rootDir, specsDir, config, options) {
             ? chalk.gray(`  💰 $${costInfo.usd.toFixed(4)}`)
             : "";
         log(`${passStr}${failStr}  ${chalk.gray(`(total: ${(totalDuration / 1000).toFixed(1)}s)`)}${costStr}`);
+        // Matrix grid summary (when viewports/browsers are used)
+        const matrixScenarios = allResults.flatMap(r => r.scenarios.filter(s => s.viewport || s.browser));
+        if (matrixScenarios.length > 0) {
+            const dimensions = new Set();
+            const scenarioNames = new Set();
+            const grid = new Map();
+            for (const s of matrixScenarios) {
+                const dim = [s.viewport, s.browser].filter(Boolean).join("/") || "default";
+                dimensions.add(dim);
+                scenarioNames.add(s.scenario);
+                grid.set(`${s.scenario}::${dim}`, s.status === "pass" ? "✅" : "❌");
+            }
+            const dims = [...dimensions];
+            const maxNameLen = Math.max(...[...scenarioNames].map(n => n.length), 10);
+            log("\n" + chalk.bold("Matrix:"));
+            log(chalk.gray("  " + "".padEnd(maxNameLen) + "  " + dims.map(d => d.padEnd(10)).join("  ")));
+            for (const name of scenarioNames) {
+                const row = dims.map(d => (grid.get(`${name}::${d}`) ?? "⬜").padEnd(10)).join("  ");
+                log(`  ${name.padEnd(maxNameLen)}  ${row}`);
+            }
+        }
     }
     if (summary.failed > 0) {
         process.exit(1);
@@ -202,6 +223,7 @@ async function runSpec(entry, runConfig, log, config) {
                     status: result.status,
                     duration_ms: result.duration_ms,
                     timestamp: Date.now(),
+                    commit_sha: runConfig.commitSha || undefined,
                 });
                 const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
                 if (result.status === "pass") {
@@ -263,6 +285,10 @@ async function runSpec(entry, runConfig, log, config) {
                     }
                 }
                 scenarioResults.push(result);
+                // Streaming callback — emit result as soon as scenario completes
+                if (runConfig.onScenarioComplete) {
+                    runConfig.onScenarioComplete(spec.name, result);
+                }
             }
             catch (err) {
                 const duration = ((Date.now() - scenarioStart) / 1000).toFixed(1);
@@ -349,9 +375,43 @@ async function runSpecsFiltered(specEntries, rootDir, options, config) {
     const historyStore = new HistoryStore(path.join(rootDir, ".agentqa", "history.json"));
     const autoFixConfig = config.auto_fix ?? {};
     const autoFix = options.autoFix || autoFixConfig.enabled === true;
+    const noCache = options.noCache === true;
+    // Get current commit SHA for cache + history tracking
+    let commitSha = "";
+    try {
+        const git = new GitTool(rootDir);
+        commitSha = await git.getCurrentSha();
+    }
+    catch {
+        // Not a git repo or git not available
+    }
+    // Smart caching: skip specs that passed at this commit
+    let filteredEntries = specEntries;
+    if (commitSha && !noCache && !options.updateBaselines) {
+        const cached = [];
+        const toRun = [];
+        for (const entry of specEntries) {
+            const passed = await historyStore.getLastPassingForSpec(entry.spec.name, commitSha);
+            if (passed) {
+                cached.push(entry.spec.name);
+            }
+            else {
+                toRun.push(entry);
+            }
+        }
+        if (cached.length > 0) {
+            for (const name of cached) {
+                log(chalk.gray(`  ⏭ ${name} (cached — passed at ${commitSha.substring(0, 7)})`));
+            }
+        }
+        filteredEntries = toRun;
+    }
+    if (filteredEntries.length === 0) {
+        return { results: [], costInfo: { input_tokens: 0, output_tokens: 0, usd: 0 }, confidenceFloor: 1.0 };
+    }
     let allResults;
     try {
-        allResults = await runSpecsConcurrently(specEntries, {
+        allResults = await runSpecsConcurrently(filteredEntries, {
             timeoutMs, maxRetries, screenshotOnFailure, agentModel, rootDir,
             concurrency, verbose, json, baselineStore, historyStore,
             perfThreshold, flakyThreshold, recordVideoOnFailure,
@@ -361,6 +421,28 @@ async function runSpecsFiltered(specEntries, rootDir, options, config) {
             autoFixMinConfidence: autoFixConfig.min_confidence ?? 0.8,
             autoFixMaxFiles: autoFixConfig.max_files ?? 3,
             autoFixMaxLines: autoFixConfig.max_lines ?? 50,
+            commitSha,
+            noCache,
+            onScenarioComplete: !json ? (specName, result) => {
+                const duration = (result.duration_ms / 1000).toFixed(1);
+                if (result.status === "pass") {
+                    const flakyTag = result.flaky ? chalk.yellow(" 🟡 flaky") : "";
+                    const perfTag = result.perf_regression
+                        ? chalk.yellow(` ⚠ ${result.perf_regression.ratio.toFixed(1)}× slower`)
+                        : "";
+                    log(chalk.green(`  ✅ ${result.scenario}`) + chalk.gray(` (${duration}s)`) + flakyTag + perfTag);
+                }
+                else {
+                    log(chalk.red(`  ❌ ${result.scenario}`) + chalk.gray(` (${duration}s)`));
+                    for (const exp of result.expectations) {
+                        if (exp.status === "fail") {
+                            log(chalk.gray(`     → Expected: "${exp.text}"`));
+                            if (exp.evidence)
+                                log(chalk.gray(`     → Got: ${exp.evidence}`));
+                        }
+                    }
+                }
+            } : undefined,
         }, log, config);
     }
     finally {

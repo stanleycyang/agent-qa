@@ -144,6 +144,16 @@ export class HistoryStore {
         }
         return failures;
     }
+    /** Check if all scenarios of a spec passed at a given commit SHA. */
+    async getLastPassingForSpec(specName, sha) {
+        const all = await this.ensureLoaded();
+        // Find all entries for this spec at this SHA
+        const atCommit = all.filter(e => e.spec === specName && e.commit_sha === sha);
+        if (atCommit.length === 0)
+            return false;
+        // All must be passes
+        return atCommit.every(e => e.status === "pass");
+    }
     /**
      * Group all entries by (spec, scenario) and compute per-scenario stats.
      * Single-pass over the history. Used by the `flaky` command.

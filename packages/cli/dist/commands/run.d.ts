@@ -1,4 +1,4 @@
-import { SpecResult, AgentQASpec } from "@agentqa/core";
+import { SpecResult, AgentQASpec, ScenarioResult } from "@agentqa/core";
 import { BaselineStore, HistoryStore } from "@agentqa/tools";
 import { loadConfig } from "../config.js";
 export interface RunOptions {
@@ -32,6 +32,9 @@ interface RunConfig {
     autoFixMinConfidence: number;
     autoFixMaxFiles: number;
     autoFixMaxLines: number;
+    commitSha: string;
+    noCache: boolean;
+    onScenarioComplete?: (specName: string, result: ScenarioResult) => void;
 }
 /**
  * Public entry point for running a pre-filtered set of specs.

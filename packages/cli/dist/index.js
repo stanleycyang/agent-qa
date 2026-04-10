@@ -12,6 +12,10 @@ import { reportCommand } from "./commands/report.js";
 import { impactCommand } from "./commands/impact.js";
 import { explainCommand } from "./commands/explain.js";
 import { mcpCommand } from "./commands/mcp.js";
+import { suggestCommand } from "./commands/suggest.js";
+import { healCommand } from "./commands/heal.js";
+import { recordCommand } from "./commands/record.js";
+import { reproduceCommand } from "./commands/reproduce.js";
 import * as path from "path";
 const program = new Command();
 program
@@ -28,6 +32,7 @@ program
     .option("--watch", "Re-run specs on file changes")
     .option("--update-baselines", "Refresh visual regression baselines with current state")
     .option("--auto-fix", "On failure, propose code fixes via FixAgent")
+    .option("--no-cache", "Bypass smart caching and run all specs")
     .action(async (specName, opts) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await runCommand(specName, rootDir, {
@@ -119,6 +124,21 @@ program
     await flakyCommand(rootDir);
 });
 program
+    .command("suggest")
+    .description("Detect uncovered code changes and auto-generate spec suggestions")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .option("--since <ref>", "Git ref to diff against (default: origin/main)")
+    .option("--dry-run", "Show suggested specs without writing to disk")
+    .option("--json", "Output as JSON")
+    .action(async (opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await suggestCommand(rootDir, {
+        since: opts?.since,
+        dryRun: opts?.dryRun,
+        json: opts?.json,
+    });
+});
+program
     .command("impact")
     .description("Predict which specs are at risk from the current diff and run them")
     .option("-d, --dir <path>", "Root directory", process.cwd())
@@ -163,6 +183,47 @@ program
     .action(async (opts) => {
     const rootDir = path.resolve(opts?.dir ?? process.cwd());
     await mcpCommand(rootDir);
+});
+program
+    .command("heal")
+    .description("Find flaky scenarios, diagnose them, and propose fixes")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .option("--threshold <n>", "Minimum flakiness rate to investigate (0-1, default: 0.2)", v => parseFloat(v))
+    .option("--runs <n>", "Number of re-runs per flaky scenario (default: 3)", v => parseInt(v, 10))
+    .option("--auto-apply", "Apply proposed fixes directly")
+    .action(async (opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await healCommand(rootDir, {
+        threshold: opts?.threshold,
+        runs: opts?.runs,
+        autoApply: opts?.autoApply,
+    });
+});
+program
+    .command("record")
+    .description("Record a browser session and generate a spec from it")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .option("--url <url>", "Starting URL to navigate to")
+    .option("--dry-run", "Show generated spec without writing to disk")
+    .option("--out <dir>", "Output directory for specs")
+    .action(async (opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await recordCommand(rootDir, {
+        url: opts?.url,
+        dryRun: opts?.dryRun,
+        out: opts?.out,
+    });
+});
+program
+    .command("reproduce <source>")
+    .description("Generate a regression spec from a Sentry issue or Linear/Jira URL and run it")
+    .option("-d, --dir <path>", "Root directory", process.cwd())
+    .option("--dry-run", "Generate spec without running it")
+    .action(async (source, opts) => {
+    const rootDir = path.resolve(opts?.dir ?? process.cwd());
+    await reproduceCommand(source, rootDir, {
+        dryRun: opts?.dryRun,
+    });
 });
 program
     .command("validate")

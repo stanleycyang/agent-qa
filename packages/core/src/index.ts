@@ -5,3 +5,4 @@ export * from "./plan-builder.js";
 export * from "./orchestrator.js";
 export * from "./pricing.js";
 export * from "./impact-ranker.js";
+export * from "./preview-detector.js";
