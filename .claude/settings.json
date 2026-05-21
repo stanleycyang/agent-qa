@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(agentqa impact:*)",
+      "Bash(agentqa explain:*)",
+      "Bash(agentqa validate:*)",
+      "Bash(agentqa gaps:*)",
+      "Bash(agentqa flaky:*)",
+      "Bash(agentqa generate:*)",
+      "Bash(npx agentqa impact:*)",
+      "Bash(npx agentqa explain:*)",
+      "Bash(npx agentqa validate:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/agentqa-impact.sh",
+            "timeout": 8000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/agentqa-session.sh",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/agentqa-stop.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": ".claude/hooks/agentqa-status.sh"
+  }
+}
